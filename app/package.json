@@ -1,0 +1,22 @@
+{
+  "name": "boogle",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal Google-style search engine with a Claude AI overview, backed by SearXNG",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "dev": "tsc -p tsconfig.json && node --watch dist/server.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.0",
+    "@mozilla/readability": "^0.6.0",
+    "hono": "^4.7.0",
+    "linkedom": "^0.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}

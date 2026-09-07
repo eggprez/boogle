@@ -1,0 +1,66 @@
+# Boogle: personal Google-style search with a Claude AI overview.
+#
+#   cp .env.example .env      # then edit
+#   docker compose up -d --build
+#
+# Only the boogle service is published (on 127.0.0.1 by default). SearXNG sits
+# on the private network and is reachable only from boogle.
+
+services:
+  searxng:
+    # Upstream image plus a one-line Wikidata label fix; see searxng/Dockerfile.
+    build: ./searxng
+    image: boogle-searxng:local
+    container_name: boogle-searxng
+    restart: unless-stopped
+    networks: [boogle]
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+      - SEARXNG_SECRET=${SEARXNG_SECRET:?set SEARXNG_SECRET in .env (openssl rand -hex 32)}
+      - SEARXNG_LIMITER=false
+      - SEARXNG_PUBLIC_INSTANCE=false
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID]
+    logging:
+      driver: json-file
+      options: { max-size: "1m", max-file: "1" }
+
+  boogle:
+    build: ./app
+    image: boogle:local
+    container_name: boogle
+    restart: unless-stopped
+    depends_on: [searxng]
+    networks: [boogle]
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${BOOGLE_PORT:-8081}:8080"
+    environment:
+      - SITE_NAME=${SITE_NAME:-Boogle}
+      - PUBLIC_URL=${PUBLIC_URL:-http://localhost:8081}
+      - ACCENT_COLOR=${ACCENT_COLOR:-#6d28d9}
+      - SEARXNG_URL=http://searxng:8080
+      - AUTH_MODE=${AUTH_MODE:-proxy}
+      - AUTH_USER_HEADER=${AUTH_USER_HEADER:-Remote-User}
+      - AUTH_PROXY_SECRET=${AUTH_PROXY_SECRET:-}
+      - ALLOWED_USERS=${ALLOWED_USERS:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - OVERVIEW_TIMEOUT_SECONDS=${OVERVIEW_TIMEOUT_SECONDS:-120}
+      - OVERVIEW_CACHE_TTL_HOURS=${OVERVIEW_CACHE_TTL_HOURS:-168}
+      - MAX_CONCURRENT_OVERVIEWS=${MAX_CONCURRENT_OVERVIEWS:-2}
+      - DEEP_READ_PAGES=${DEEP_READ_PAGES:-5}
+      - SNIPPET_SOURCES=${SNIPPET_SOURCES:-10}
+    volumes:
+      - boogle-data:/data
+      - boogle-claude-home:/home/node
+    logging:
+      driver: json-file
+      options: { max-size: "1m", max-file: "1" }
+
+networks:
+  boogle:
+
+volumes:
+  boogle-data:
+  boogle-claude-home:

@@ -1,0 +1,7 @@
+.env
+node_modules/
+app/dist/
+searxng/uwsgi.ini
+searxng/limiter.toml
+searxng/favicons.toml
+*.log

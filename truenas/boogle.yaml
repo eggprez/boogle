@@ -1,0 +1,63 @@
+# Boogle on TrueNAS SCALE, using the prebuilt images from GitHub.
+#
+#   Apps -> Discover Apps -> (three dots, top right) -> Install via YAML
+#   Name: boogle    Paste this file, then change the two CHANGE_ME values.
+#
+# Nothing needs to be copied to the NAS: both images already contain the code
+# and SearXNG's settings.yml. Claude login and the overview cache live in the
+# two named volumes at the bottom, so they survive restarts and updates.
+
+services:
+  searxng:
+    image: ghcr.io/eggprez/boogle-searxng:latest
+    container_name: boogle-searxng
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: "http://searxng:8080/"
+      SEARXNG_SECRET: "CHANGE_ME_random_hex"      # any long random string
+      SEARXNG_LIMITER: "false"
+      SEARXNG_PUBLIC_INSTANCE: "false"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID]
+    logging:
+      driver: json-file
+      options: { max-size: "1m", max-file: "1" }
+
+  boogle:
+    image: ghcr.io/eggprez/boogle:latest
+    container_name: boogle
+    restart: unless-stopped
+    depends_on: [searxng]
+    ports:
+      - "8081:8080"                 # open http://<truenas-ip>:8081
+    environment:
+      SITE_NAME: "Boogle"
+      PUBLIC_URL: "http://CHANGE_ME_truenas_ip:8081"   # what you type in the browser
+      ACCENT_COLOR: "#6d28d9"
+      SEARXNG_URL: "http://searxng:8080"
+      # AUTH_MODE: none  = no login, fine while it is only reachable on your LAN.
+      # AUTH_MODE: proxy = behind NGINX + TinyAuth (see README); required before
+      #                    exposing it to the internet, since it runs on your
+      #                    personal Claude subscription.
+      AUTH_MODE: "none"
+      AUTH_USER_HEADER: "Remote-User"
+      AUTH_PROXY_SECRET: ""
+      ALLOWED_USERS: ""
+      # Leave empty and log in once via the container Shell (`claude`, then /login),
+      # or paste the output of `claude setup-token` here instead.
+      CLAUDE_CODE_OAUTH_TOKEN: ""
+      OVERVIEW_TIMEOUT_SECONDS: "120"
+      OVERVIEW_CACHE_TTL_HOURS: "168"
+      MAX_CONCURRENT_OVERVIEWS: "2"
+      DEEP_READ_PAGES: "5"
+      SNIPPET_SOURCES: "10"
+    volumes:
+      - boogle-data:/data
+      - boogle-claude-home:/home/node
+    logging:
+      driver: json-file
+      options: { max-size: "1m", max-file: "1" }
+
+volumes:
+  boogle-data:
+  boogle-claude-home:

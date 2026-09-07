@@ -1,0 +1,175 @@
+# SearXNG settings for Boogle. Everything not listed here comes from SearXNG's
+# defaults (use_default_settings: true). The instance is private: only the
+# boogle container can reach it, so the bot limiter is off and JSON is on.
+#
+# Engine tuning (measured 2026-09-07 against a fresh instance):
+#   web    Google CSE + Startpage (Google results) + Brave supply nearly all
+#          useful results; DuckDuckGo hit a CAPTCHA on every query. Google is
+#          weighted highest so ranking feels like Google. Reddit and Stack
+#          Overflow are pulled into web results the way Google surfaces them.
+#   images icon libraries (devicons, lucide) produced ~70% of results and stock
+#          photo sites added unrelated photos; only real web-image engines stay.
+#   videos vimeo was erroring; small federated sources removed.
+#   timeout 5 s cap so one slow engine can't hold the page much longer.
+use_default_settings: true
+
+general:
+  instance_name: "Boogle backend"
+  debug: false
+  enable_metrics: false
+
+server:
+  # Overridden by the SEARXNG_SECRET env var in docker-compose.yml.
+  secret_key: "replaced-by-SEARXNG_SECRET-env"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+search:
+  formats:
+    - html
+    - json
+  # Autocomplete engine for the search box suggestions. Options include
+  # google, duckduckgo, brave, wikipedia, startpage, qwant.
+  autocomplete: "google"
+  autocomplete_min: 2
+  safe_search: 0
+  default_lang: "auto"
+
+outgoing:
+  # Default per-engine timeout and the hard cap.
+  request_timeout: 5.0
+  max_request_timeout: 5.0
+  pool_connections: 100
+  pool_maxsize: 20
+  enable_http2: true
+
+ui:
+  static_use_hash: true
+  default_locale: "en"
+  results_on_new_tab: false
+
+engines:
+  # ---------------------------------------------------------------- web ----
+  - name: google cse
+    weight: 2.0
+  - name: startpage
+    weight: 1.5
+  - name: brave
+    weight: 1.0
+  - name: duckduckgo
+    disabled: true            # CAPTCHA on every request; DDG results are Bing's anyway
+  - name: bing
+    disabled: false           # stands in for DuckDuckGo (same underlying index)
+    weight: 1.0
+
+  # Reddit. SearXNG removed its Reddit engine and reddit.com answers 403/429
+  # to server requests, so this uses the PullPush archive API (a public mirror
+  # of Reddit posts). Coverage is good, ranking is by score, freshness lags a
+  # bit. Reddit threads also keep arriving via Google/Startpage/Brave/Bing.
+  - name: reddit
+    engine: json_engine
+    shortcut: re
+    categories: [general, social media]
+    search_url: https://api.pullpush.io/reddit/search/submission/?q={query}&size=20&sort=desc&sort_type=score
+    results_query: data
+    url_query: permalink
+    url_prefix: https://www.reddit.com
+    title_query: title
+    content_query: selftext
+    weight: 0.6
+    timeout: 5.0
+    about:
+      website: https://www.reddit.com
+      official_api_documentation: https://pullpush.io
+      results: JSON
+
+  # Optional, best quality: Reddit through your own free Google Programmable
+  # Search Engine restricted to reddit.com. Create one at
+  # https://programmablesearchengine.google.com (sites to search: reddit.com),
+  # copy its "Search engine ID" into cx below, and set disabled: false.
+  # - name: reddit via google
+  #   engine: google_cse
+  #   shortcut: rg
+  #   categories: [general, social media]
+  #   cx: "YOUR_SEARCH_ENGINE_ID"
+  #   weight: 1.0
+  #   disabled: true
+
+  - name: stackoverflow
+    disabled: false
+    categories: [general, it, q&a]
+    weight: 0.8
+  # Translators and dictionaries: noise for a general search box, and slow.
+  - name: lingva
+    disabled: true
+  - name: mymemory translated
+    disabled: true
+  - name: dictzone
+    disabled: true
+  # Kept: wikipedia (abstract card), wikidata (infobox), currency (instant answer)
+
+  # ------------------------------------------------------------- images ----
+  - name: google cse images
+    weight: 2.0
+  - name: startpage images
+    weight: 1.5
+  - name: brave.images
+    weight: 1.0
+  - name: bing images
+    weight: 1.0
+  - name: duckduckgo images
+    weight: 1.0
+  - name: devicons
+    disabled: true
+  - name: lucide
+    disabled: true
+  - name: artic
+    disabled: true
+  - name: openverse
+    disabled: true
+  - name: flickr
+    disabled: true
+  - name: pexels
+    disabled: true
+  - name: unsplash
+    disabled: true
+  - name: pinterest
+    disabled: true
+  - name: wikicommons.images
+    disabled: true
+
+  # --------------------------------------------------------------- news ----
+  - name: google news
+    weight: 2.0
+  - name: brave.news
+    weight: 1.0
+  - name: bing news
+    weight: 1.0
+  - name: startpage news
+    weight: 1.0
+  - name: duckduckgo news
+    disabled: true
+  - name: wikinews
+    disabled: true
+
+  # ------------------------------------------------------------- videos ----
+  - name: youtube
+    weight: 2.0
+  - name: google videos
+    weight: 1.5
+  - name: brave.videos
+    weight: 1.0
+  - name: bing videos
+    weight: 1.0
+  - name: duckduckgo videos
+    weight: 1.0
+  - name: vimeo
+    disabled: true            # HTTP errors
+  - name: sepiasearch
+    disabled: true
+  - name: wikicommons.videos
+    disabled: true
+  - name: dailymotion
+    disabled: true
