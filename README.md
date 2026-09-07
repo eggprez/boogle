@@ -228,7 +228,7 @@ a cache-clear button, and the bang list. Settings are stored per user under
 `src/overview/claude.ts` spawns:
 
 ```
-claude -p --bare --no-session-persistence --tools "" \
+claude -p --no-session-persistence --tools "" \
        --output-format stream-json --verbose --include-partial-messages \
        --max-turns 1 --model <haiku|sonnet|opus> \
        --system-prompt "<overview instructions>"

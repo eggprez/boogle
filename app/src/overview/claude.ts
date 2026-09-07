@@ -74,7 +74,6 @@ export async function* runClaudeOverview(opts: {
 
   const args = [
     '-p',
-    '--bare', // skip hooks, LSP, plugins: faster startup, nothing but the model
     '--no-session-persistence',
     '--tools', '', // no tools at all: this is a plain completion, not an agent
     '--output-format', 'stream-json',
@@ -84,6 +83,10 @@ export async function* runClaudeOverview(opts: {
     '--model', opts.model,
     '--system-prompt', SYSTEM_PROMPT(config.siteName),
   ];
+  // --bare starts faster (no hooks, LSP, plugins) but authenticates ONLY with
+  // ANTHROPIC_API_KEY: it never reads the OAuth login in ~/.claude, so a
+  // subscription login reports "Not logged in". Use it only with an API key.
+  if (process.env.ANTHROPIC_API_KEY) args.splice(1, 0, '--bare');
 
   const child = spawn(config.claudeBin, args, {
     cwd: workDir,
