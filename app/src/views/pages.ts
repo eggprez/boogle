@@ -84,8 +84,12 @@ export function resultsPage(opts: {
 
   const unresponsive = (data?.unresponsive_engines ?? []).map((x) => x[0]);
   const retryHref = link(`&tab=${tab}${t}${page > 1 ? `&page=${page}` : ''}&retry=1`);
+  // Engines that didn't respond get a quiet "i" in the top bar rather than a
+  // banner: it happens often enough that a banner would be noise.
   const engineNote = unresponsive.length
-    ? `<div class="notice warn engine-note"><span>${unresponsive.length} search engine${unresponsive.length > 1 ? 's' : ''} didn't respond (${e(unresponsive.join(', '))}); results may be thinner than usual.</span><a class="retry" href="${retryHref}">${icons.refresh} Retry</a></div>`
+    ? `<details class="engine-info"><summary title="${unresponsive.length} search engine${unresponsive.length > 1 ? 's' : ''} didn't respond" aria-label="Engine status">i</summary><div class="engine-pop"><b>${unresponsive.length} search engine${unresponsive.length > 1 ? 's' : ''} didn't respond</b>; results may be thinner than usual.<ul>${(data?.unresponsive_engines ?? [])
+        .map(([name, why]) => `<li>${e(name)}${why ? ` <span class="why">· ${e(why)}</span>` : ''}</li>`)
+        .join('')}</ul><a class="retry" href="${retryHref}">${icons.refresh} Retry</a></div></details>`
     : '';
 
   let list = '';
@@ -148,6 +152,7 @@ export function resultsPage(opts: {
     <div class="ov-panel-head">${icons.book} <span>Sources</span> <span class="ov-panel-count" id="ov-cites-count"></span></div>
     <div class="ov-cites" id="ov-cites"></div>
     <p class="ov-panel-hint">Numbers in the overview point at these. Hover one to see where it was used.</p>
+    <button type="button" class="ov-more" id="ov-more" aria-label="Show all sources"><span>${icons.chevronDown}</span></button>
   </div>
 </aside>`;
   const overview = showOverview
@@ -184,13 +189,13 @@ export function resultsPage(opts: {
 <header class="topbar">
   ${logo('sm')}
   ${searchForm({ q, tab, size: 'sm' })}
+  ${engineNote}
   <a class="iconbtn" href="/settings" title="Settings" aria-label="Settings">${icons.gear}</a>
 </header>
 <nav class="tabs" aria-label="Result types">${tabs}${filters}</nav>
 <main class="results-layout" data-tab="${tab}">
   <div class="main-col">
     ${didYouMean}
-    ${engineNote}
     ${shortAnswers}
     ${overview}
     ${longAnswers}

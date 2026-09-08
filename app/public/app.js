@@ -197,6 +197,12 @@
   const ov = document.getElementById('overview');
   if (ov) setupOverview(ov);
 
+  const engineInfo = document.querySelector('.engine-info');
+  if (engineInfo) {
+    document.addEventListener('click', (ev) => { if (!engineInfo.contains(ev.target)) engineInfo.open = false; });
+    document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') engineInfo.open = false; });
+  }
+
   function setupOverview(root) {
     const body = document.getElementById('ov-body');
     const status = document.getElementById('ov-status');
@@ -236,6 +242,26 @@
     const sideEl = document.getElementById('ov-side');
     const citesEl = document.getElementById('ov-cites');
     const citesCount = document.getElementById('ov-cites-count');
+    // The panel sits beside the overview and matches its height; when the
+    // list is longer than that, an arrow at the bottom unfolds it.
+    const panel = sideEl?.querySelector('.ov-panel');
+    const moreBtn = document.getElementById('ov-more');
+    const fitPanel = () => {
+      if (!panel || sideEl.hidden) return;
+      const main = root.parentElement.getBoundingClientRect();
+      const ov = root.getBoundingClientRect();
+      sideEl.style.marginTop = `${Math.max(0, Math.round(ov.top - main.top))}px`;
+      panel.style.setProperty('--ov-h', `${Math.round(ov.height)}px`);
+      panel.classList.toggle('clipped', !panel.classList.contains('open') && panel.scrollHeight > panel.clientHeight + 1);
+    };
+    if (panel) {
+      new ResizeObserver(fitPanel).observe(root);
+      moreBtn?.addEventListener('click', () => {
+        panel.classList.toggle('open');
+        moreBtn.setAttribute('aria-label', panel.classList.contains('open') ? 'Show fewer sources' : 'Show all sources');
+        fitPanel();
+      });
+    }
     const renderSources = () => {
       if (!sources.length) {
         srcEl.hidden = true;
@@ -273,6 +299,7 @@
       citesCount.textContent = sources.length;
       sideEl.hidden = false;
       markUses();
+      requestAnimationFrame(fitPanel);
     };
     // How many times each source is cited in the overview so far.
     const markUses = () => {
