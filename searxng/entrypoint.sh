@@ -4,6 +4,8 @@
 #
 #   GOOGLE_CSE_ID         your Programmable Search Engine ID; without it the
 #                         "google cse" engines use SearXNG's shared public one
+#   GOOGLE_SITES_CSE_ID   a Programmable Search Engine limited to your own
+#                         list of sites; enables the "google sites" engine
 #   REDDIT_CLIENT_ID      Reddit app credentials; with both set, the official
 #   REDDIT_CLIENT_SECRET  API engine runs and the pullpush.io fallback is off
 #
@@ -21,6 +23,14 @@ if [ -n "${GOOGLE_CSE_ID:-}" ]; then
 else
     sed -i '/__GOOGLE_CSE_ID__/d' "$out"
     echo "boogle: GOOGLE_CSE_ID not set, google cse uses SearXNG's shared ID"
+fi
+
+if [ -n "${GOOGLE_SITES_CSE_ID:-}" ]; then
+    sed -i "s|__GOOGLE_SITES_CSE_ID__|${GOOGLE_SITES_CSE_ID}|g" "$out"
+    sed -i 's|^\([[:space:]]*disabled:[[:space:]]*\)true\([[:space:]]*# boogle:google-sites\)|\1false\2|' "$out"
+    echo "boogle: google sites engine on, searching your own site list"
+else
+    echo "boogle: GOOGLE_SITES_CSE_ID not set, google sites engine off"
 fi
 
 if [ -n "${REDDIT_CLIENT_ID:-}" ] && [ -n "${REDDIT_CLIENT_SECRET:-}" ]; then

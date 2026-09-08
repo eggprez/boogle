@@ -95,12 +95,13 @@ only reachable on your LAN; before putting it behind a public hostname switch to
 Out of the box SearXNG reaches Google through a search-engine ID shared by every
 SearXNG install and Reddit through a third-party archive. Both get rate-limited,
 which shows up as "N search engines didn't respond (google cse, reddit, …)" and
-a few minutes of thinner results. Three values on the `searxng` container fix
-that; they are optional and independent.
+a few minutes of thinner results. Four values on the `searxng` container help
+with that; they are optional and independent.
 
 | Variable | Where it comes from |
 |---|---|
 | `GOOGLE_CSE_ID` | Only if you already own a Programmable Search Engine set to **Search the entire web**: copy its **Search engine ID** from https://programmablesearchengine.google.com (looks like `a1b2c3d4e5f6g7h8i`; no API key needed). Google stopped offering whole-web engines to new users on 20 January 2026; new engines are limited to 50 sites, and existing whole-web engines stop on 1 January 2027. Do **not** put a site-limited engine here: it feeds the general web and image results, so it would narrow every search to those sites. Leave it empty otherwise. |
+| `GOOGLE_SITES_CSE_ID` | The kind of engine Google still creates: https://programmablesearchengine.google.com → Add → name it, under **Sites to search** add up to 50 sites you trust (e.g. `reddit.com`, `stackoverflow.com`, `en.wikipedia.org`, `developer.mozilla.org`, `docs.python.org`) → Create → copy the **Search engine ID**. This runs as an extra `google sites` engine next to the general ones, so pages from your sites that Google also ranks get a boost, and its own picks stay low on the page. Edit the site list at any time without touching Boogle. |
 | `REDDIT_CLIENT_ID` | https://www.reddit.com/prefs/apps → **create another app** → type **script**, any name, redirect URI `http://localhost` → Create. The ID is the short string under the app name. |
 | `REDDIT_CLIENT_SECRET` | the **secret** shown on the same app. |
 

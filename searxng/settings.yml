@@ -98,6 +98,18 @@ engines:
   - name: google cse
     weight: 1.5
     CX: "__GOOGLE_CSE_ID__"
+  # Your own Programmable Search Engine limited to up to 50 sites you trust
+  # (GOOGLE_SITES_CSE_ID on the container; entrypoint.sh fills in the ID and
+  # enables the engine). It runs alongside the general engines, so a hit on
+  # one of your sites that Google also lists gets the agreement bonus, while
+  # its solo picks stay low on the page.
+  - name: google sites
+    engine: google_cse
+    shortcut: gs
+    categories: [general, web]
+    disabled: true  # boogle:google-sites
+    weight: 0.7
+    CX: "__GOOGLE_SITES_CSE_ID__"
   - name: brave
     weight: 1.0
   - name: bing
