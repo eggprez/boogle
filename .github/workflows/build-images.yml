@@ -71,7 +71,7 @@ jobs:
           curl -fsS 'http://127.0.0.1:8080/search?q=smoke+test' -o search.html
           grep -q 'Example result 1' search.html
           grep -q 'class="filter active"' search.html
-          grep -q 'engine-note' search.html
+          grep -q 'engine-info' search.html
           curl -fsS 'http://127.0.0.1:8080/search?q=smoke&tab=images' | grep -q 'img-card'
           curl -fsS 'http://127.0.0.1:8080/search?q=smoke&tab=videos' | grep -q 'data-embed='
           curl -fsS 'http://127.0.0.1:8080/search?q=smoke&t=week' | grep -q 'Example result 1'
