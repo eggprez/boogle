@@ -100,9 +100,13 @@ that; they are optional and independent.
 
 | Variable | Where it comes from |
 |---|---|
-| `GOOGLE_CSE_ID` | https://programmablesearchengine.google.com → Add → name it, turn on **Search the entire web** → Create. Copy the **Search engine ID** (looks like `a1b2c3d4e5f6g7h8i`). No API key is needed. |
+| `GOOGLE_CSE_ID` | Only if you already own a Programmable Search Engine set to **Search the entire web**: copy its **Search engine ID** from https://programmablesearchengine.google.com (looks like `a1b2c3d4e5f6g7h8i`; no API key needed). Google stopped offering whole-web engines to new users on 20 January 2026; new engines are limited to 50 sites, and existing whole-web engines stop on 1 January 2027. Do **not** put a site-limited engine here: it feeds the general web and image results, so it would narrow every search to those sites. Leave it empty otherwise. |
 | `REDDIT_CLIENT_ID` | https://www.reddit.com/prefs/apps → **create another app** → type **script**, any name, redirect URI `http://localhost` → Create. The ID is the short string under the app name. |
 | `REDDIT_CLIENT_SECRET` | the **secret** shown on the same app. |
+
+Without a whole-web `GOOGLE_CSE_ID`, Google results come from the `google`
+engine (google.com directly, the highest-weighted source) plus SearXNG's shared
+Programmable Search ID, which is rate-limited and also ends on 1 January 2027.
 
 The free Reddit tier allows 100 requests a minute per app, far more than
 personal use needs. On TrueNAS put the values into the YAML (Apps → boogle →

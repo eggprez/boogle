@@ -88,11 +88,13 @@ engines:
   - name: google
     disabled: false
     weight: 2.0
-  # Set GOOGLE_CSE_ID on the container to search with your own Programmable
-  # Search Engine (programmablesearchengine.google.com, "search the entire
-  # web"). The placeholder line is filled in, or dropped, by entrypoint.sh.
-  # Without it SearXNG's shared public ID is used, which Google rate-limits
-  # for everyone at once ("unusual traffic" -> engine suspended).
+  # GOOGLE_CSE_ID on the container swaps in your own Programmable Search
+  # Engine ID; entrypoint.sh fills in, or drops, the placeholder line. Only
+  # an engine set to "search the entire web" makes sense here, and Google
+  # stopped creating those on 2026-01-20 (new ones are capped at 50 sites;
+  # existing whole-web ones end 2027-01-01). Without it SearXNG's shared
+  # public ID is used, which Google rate-limits for everyone at once
+  # ("unusual traffic" -> engine suspended) and which has the same end date.
   - name: google cse
     weight: 1.5
     CX: "__GOOGLE_CSE_ID__"
