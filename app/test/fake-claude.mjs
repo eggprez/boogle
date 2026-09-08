@@ -11,6 +11,17 @@ let input = '';
 stdin.setEncoding('utf8');
 stdin.on('data', (d) => (input += d));
 stdin.on('end', async () => {
+  // `--output-format json` is the one-shot path (overview/ask.ts): today the
+  // place classifier. Well-known cities and landmarks are places, the rest not.
+  if (argv[argv.indexOf('--output-format') + 1] === 'json') {
+    const query = input.match(/Query: "(.*)"/)?.[1] ?? '';
+    const isPlace = /^(lisbon|paris|denver|eiffel tower|kyoto)$/i.test(query.trim());
+    const result = isPlace
+      ? JSON.stringify({ place: true, name: query.replace(/\b\w/g, (c) => c.toUpperCase()), kind: /tower/i.test(query) ? 'landmark' : 'city', category: null, area: '' })
+      : JSON.stringify({ place: false, name: '', kind: 'other', category: null, area: '' });
+    stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result, total_cost_usd: 0.0001, duration_ms: 50 }) + '\n');
+    return;
+  }
   const followup = input.match(/Follow-up question: (.*)/);
   const query = input.match(/Search query: "(.*)"/)?.[1] ?? 'your query';
   const nSources = (input.match(/^\[\d+\] /gm) || []).length;

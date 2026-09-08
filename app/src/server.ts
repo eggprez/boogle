@@ -12,6 +12,7 @@ import { generateFollowup, generateOverview, type OverviewEvent } from './overvi
 import { claudeVersion, type FollowupTurn } from './overview/claude.js';
 import { topStories } from './news.js';
 import { buildPlaces, placeIntent } from './places.js';
+import { classifyPlace } from './places-classify.js';
 import { redditHealth } from './reddit.js';
 import { autocomplete, parseTimeRange, ping, search, TABS, type SearxResponse, type SearxResult, type Tab } from './searxng.js';
 import { loadSettings, parseMode, sanitize, saveSettings } from './settings.js';
@@ -90,13 +91,19 @@ app.get('/search', async (c) => {
     error = (err as Error).message;
     console.error('[search]', q, error);
   }
-  const placesPending = first && config.places && settings.places && !error && !!placeIntent(q);
-  return c.html(resultsPage({ q, tab, page, timeRange, data, error, settings, overviewMode, stories, placesPending }));
+  // Places: the client asks /api/places for every first web page (a Claude
+  // classifier decides there); a query the patterns already recognise as a
+  // list of places gets its skeleton drawn in the page straight away.
+  const placesOn = first && config.places && settings.places && !error;
+  const placesPending = placesOn && placeIntent(q)?.kind === 'attractions';
+  return c.html(resultsPage({ q, tab, page, timeRange, data, error, settings, overviewMode, stories, placesOn, placesPending }));
 });
 
-// The places card for a query ("things to do in Lisbon"), as an HTML
-// fragment the results page drops into its #places slot. 204 when the query
-// is not a place one or the place cannot be found.
+// The places card for a query, as an HTML fragment the results page puts
+// in its main column (a list of places) or right column (one place). 204
+// when the query is not about a place or the place cannot be found. With
+// infobox=1 the page already has a knowledge panel, so a one-place panel
+// would be a duplicate and only a list is returned.
 app.get('/api/places', async (c) => {
   const q = (c.req.query('q') ?? '').trim().slice(0, 512);
   if (!q || !config.places) return c.body(null, 204);
@@ -104,7 +111,10 @@ app.get('/api/places', async (c) => {
   if (!settings.places) return c.body(null, 204);
   let data;
   try {
-    data = await buildPlaces(q, { fresh: c.req.query('retry') === '1' });
+    const intent = await classifyPlace(q);
+    if (!intent) return c.body(null, 204);
+    if (intent.kind === 'place' && c.req.query('infobox') === '1') return c.body(null, 204);
+    data = await buildPlaces(intent, { fresh: c.req.query('retry') === '1' });
   } catch (err) {
     console.error('[places]', q, (err as Error).message);
     return c.body(null, 204);

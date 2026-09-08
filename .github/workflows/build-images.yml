@@ -82,6 +82,9 @@ jobs:
           curl -fsS 'http://127.0.0.1:8080/search?q=things+to+do+in+lisbon' -o lisbon.html
           grep -q 'id="places"' lisbon.html
           test "$(curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8080/api/places?q=smoke+test')" = 204
+          # the fake Claude CLI's classifier says no for this one (json output path)
+          test "$(curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8080/api/places?q=paris+hilton')" = 204
+          grep -q 'data-places="1"' search.html
           curl -fsS 'http://127.0.0.1:8080/search?q=smoke&tab=images' | grep -q 'img-card'
           curl -fsS 'http://127.0.0.1:8080/search?q=smoke&tab=videos' | grep -q 'data-embed='
           curl -fsS 'http://127.0.0.1:8080/search?q=smoke&t=week' | grep -q 'Example result 1'

@@ -248,14 +248,16 @@
     const moreBtn = document.getElementById('ov-more');
     const fitPanel = () => {
       if (!panel || sideEl.hidden) return;
-      const main = root.parentElement.getBoundingClientRect();
       const ov = root.getBoundingClientRect();
-      sideEl.style.marginTop = `${Math.max(0, Math.round(ov.top - main.top))}px`;
+      // Where the aside would start with no margin (a place panel may sit above it).
+      const naturalTop = sideEl.getBoundingClientRect().top - (parseFloat(sideEl.style.marginTop) || 0);
+      sideEl.style.marginTop = `${Math.max(0, Math.round(ov.top - naturalTop))}px`;
       panel.style.setProperty('--ov-h', `${Math.round(ov.height)}px`);
       panel.classList.toggle('clipped', !panel.classList.contains('open') && panel.scrollHeight > panel.clientHeight + 1);
     };
     if (panel) {
       new ResizeObserver(fitPanel).observe(root);
+      window.addEventListener('resize', fitPanel);
       moreBtn?.addEventListener('click', () => {
         panel.classList.toggle('open');
         moreBtn.setAttribute('aria-label', panel.classList.contains('open') ? 'Show fewer sources' : 'Show all sources');
@@ -638,22 +640,49 @@
   // The results page leaves an empty #places slot for a place query; the card
   // itself comes from /api/places once the page is up, so a slow map service
   // never delays the results. Hovering a card lights its pin and vice versa.
+  // Without a slot the page still asks (a Claude classifier on the server
+  // decides), and a card that comes back is placed by its data-place: a list
+  // of places at the top of the main column, one place as a panel in the
+  // right column, where a knowledge panel would sit.
   const placesSlot = document.getElementById('places');
+  const resultsLayout = document.querySelector('.results-layout');
   if (placesSlot && placesSlot.dataset.q !== undefined && !placesSlot.dataset.loaded) loadPlaces(placesSlot);
   else if (placesSlot) wirePins(placesSlot);
+  else if (resultsLayout?.dataset.places === '1') loadPlaces(null);
   async function loadPlaces(slot, retry) {
+    const q = slot ? slot.dataset.q : resultsLayout.dataset.q;
+    const params = new URLSearchParams({ q });
+    if (retry) params.set('retry', '1');
+    if (resultsLayout?.dataset.infobox === '1') params.set('infobox', '1');
     try {
-      const res = await fetch('/api/places?q=' + encodeURIComponent(slot.dataset.q) + (retry ? '&retry=1' : ''), { headers: { Accept: 'text/html' } });
-      if (res.status !== 200) return slot.remove();
+      const res = await fetch('/api/places?' + params, { headers: { Accept: 'text/html' } });
+      if (res.status !== 200) return slot?.remove();
       const tpl = document.createElement('template');
       tpl.innerHTML = await res.text();
       const card = tpl.content.firstElementChild;
-      if (!card) return slot.remove();
-      slot.replaceWith(card);
+      if (!card) return slot?.remove();
+      if (card.dataset.place === 'side') {
+        slot?.remove();
+        mountSide(card);
+      } else if (slot) slot.replaceWith(card);
+      else {
+        const main = resultsLayout.querySelector('.main-col');
+        const before = main.querySelector('#overview, .stories, .answer.long, .result, .notice');
+        main.insertBefore(card, before);
+      }
       wirePins(card);
     } catch {
-      slot.remove();
+      slot?.remove();
     }
+  }
+  function mountSide(card) {
+    if (!resultsLayout) return;
+    const aside = document.createElement('aside');
+    aside.className = 'side-col place-side';
+    aside.appendChild(card);
+    // Above the overview's sources panel when there is one; it re-fits itself.
+    resultsLayout.insertBefore(aside, document.getElementById('ov-side'));
+    window.dispatchEvent(new Event('resize'));
   }
   function wirePins(root) {
     // "Try again" after a map-service timeout: swap the card back to the

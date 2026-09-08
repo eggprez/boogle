@@ -3,20 +3,21 @@ import { bboxKm, buildMap, commonsThumb, fitZoom, geoFromInfoboxUrls, placeInten
 
 describe('placeIntent', () => {
   it('recognises "category in place" queries', () => {
-    expect(placeIntent('things to do in Lisbon')).toEqual({ kind: 'attractions', category: 'attractions', place: 'Lisbon' });
-    expect(placeIntent('best museums in new york')).toEqual({ kind: 'attractions', category: 'museums', place: 'new york' });
-    expect(placeIntent('Top 10 restaurants near Tokyo')).toEqual({ kind: 'attractions', category: 'restaurants', place: 'Tokyo' });
-    expect(placeIntent('what to see in Paris?')).toEqual({ kind: 'attractions', category: 'attractions', place: 'Paris' });
-    expect(placeIntent('hotels in the Algarve')).toEqual({ kind: 'attractions', category: 'hotels', place: 'Algarve' });
+    const p = { source: 'pattern' };
+    expect(placeIntent('things to do in Lisbon')).toEqual({ kind: 'attractions', category: 'attractions', place: 'Lisbon', ...p });
+    expect(placeIntent('best museums in new york')).toEqual({ kind: 'attractions', category: 'museums', place: 'new york', ...p });
+    expect(placeIntent('Top 10 restaurants near Tokyo')).toEqual({ kind: 'attractions', category: 'restaurants', place: 'Tokyo', ...p });
+    expect(placeIntent('what to see in Paris?')).toEqual({ kind: 'attractions', category: 'attractions', place: 'Paris', ...p });
+    expect(placeIntent('hotels in the Algarve')).toEqual({ kind: 'attractions', category: 'hotels', place: 'Algarve', ...p });
   });
   it('recognises "place category" queries', () => {
-    expect(placeIntent('lisbon attractions')).toEqual({ kind: 'attractions', category: 'attractions', place: 'lisbon' });
-    expect(placeIntent('Porto best beaches')).toEqual({ kind: 'attractions', category: 'beaches', place: 'Porto' });
+    expect(placeIntent('lisbon attractions')).toEqual({ kind: 'attractions', category: 'attractions', place: 'lisbon', source: 'pattern' });
+    expect(placeIntent('Porto best beaches')).toEqual({ kind: 'attractions', category: 'beaches', place: 'Porto', source: 'pattern' });
   });
   it('recognises map and location queries', () => {
-    expect(placeIntent('map of Berlin')).toEqual({ kind: 'place', place: 'Berlin' });
-    expect(placeIntent('where is Reykjavik')).toEqual({ kind: 'place', place: 'Reykjavik' });
-    expect(placeIntent('Oslo map')).toEqual({ kind: 'place', place: 'Oslo' });
+    expect(placeIntent('map of Berlin')).toEqual({ kind: 'place', place: 'Berlin', source: 'pattern' });
+    expect(placeIntent('where is Reykjavik')).toEqual({ kind: 'place', place: 'Reykjavik', source: 'pattern' });
+    expect(placeIntent('Oslo map')).toEqual({ kind: 'place', place: 'Oslo', source: 'pattern' });
   });
   it('leaves other queries alone', () => {
     for (const q of ['python list comprehension', 'things to do in case of fire', 'restaurants near me', 'how to bar a door', 'parks and recreation cast', 'bars', 'in']) {

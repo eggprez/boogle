@@ -13,6 +13,7 @@ import { config } from './config.js';
 // geoFromInfoboxUrls() reads it.
 
 export type CategoryId = 'attractions' | 'museums' | 'restaurants' | 'cafes' | 'bars' | 'hotels' | 'parks' | 'beaches';
+export const CATEGORY_IDS: CategoryId[] = ['attractions', 'museums', 'restaurants', 'cafes', 'bars', 'hotels', 'parks', 'beaches'];
 
 interface Category {
   id: CategoryId;
@@ -92,6 +93,10 @@ export interface PlaceIntent {
   kind: 'attractions' | 'place';
   category?: CategoryId;
   place: string;
+  /** Claude's idea of what the place is: city, landmark, business, ... */
+  placeKind?: string;
+  /** pattern: matched by the regular expressions here; claude: places-classify.ts */
+  source?: 'pattern' | 'claude';
 }
 
 /**
@@ -107,13 +112,13 @@ export function placeIntent(q: string): PlaceIntent | null {
     if (!place) return null;
     const category = CATEGORIES.find((c) => m.groups?.[c.id])?.id;
     if (!category) return null;
-    return { kind: 'attractions', category, place };
+    return { kind: 'attractions', category, place, source: 'pattern' };
   }
   const mm = RE_MAP.exec(s);
   if (mm?.groups) {
     const place = cleanPlace(mm.groups.place);
     if (!place) return null;
-    return { kind: 'place', place };
+    return { kind: 'place', place, source: 'pattern' };
   }
   return null;
 }
@@ -140,11 +145,20 @@ export interface Place extends Geo {
   displayName: string;
   /** Nominatim's addresstype: city, town, country, ... */
   type: string;
+  /** Nominatim's category/type, e.g. "amenity restaurant", for the panel's subtitle */
+  kindLabel?: string;
   osmType?: string;
   osmId?: number;
   wikidata?: string;
   wikipedia?: string;
   website?: string;
+  phone?: string;
+  openingHours?: string;
+  /** from Wikidata / Wikipedia (enrichPlace) */
+  image?: string;
+  description?: string;
+  extract?: string;
+  article?: string;
 }
 
 export interface Attraction {
@@ -185,10 +199,8 @@ const CACHE_MS = 24 * 3_600_000;
 const FAILED_CACHE_MS = 60_000;
 const cache = new Map<string, { at: number; value: Promise<PlacesData | null> }>();
 
-/** The card's data for a query, or null when the place cannot be found. Memoised for a day. */
-export function buildPlaces(q: string, opts: { fresh?: boolean } = {}): Promise<PlacesData | null> {
-  const intent = placeIntent(q);
-  if (!intent) return Promise.resolve(null);
+/** The card's data for an intent, or null when the place cannot be found. Memoised for a day. */
+export function buildPlaces(intent: PlaceIntent, opts: { fresh?: boolean } = {}): Promise<PlacesData | null> {
   const key = `${intent.kind}:${intent.category ?? ''}:${intent.place.toLowerCase()}`;
   const hit = cache.get(key);
   const now = Date.now();
@@ -208,9 +220,19 @@ export function buildPlaces(q: string, opts: { fresh?: boolean } = {}): Promise<
 }
 
 async function resolve(intent: PlaceIntent): Promise<PlacesData | null> {
-  const place = await geocode(intent.place);
+  // The pattern path has only a regular expression's word for it that the
+  // text is a place, so Nominatim's answer must be place-shaped; Claude has
+  // already said what the query is about, so any hit for its name will do.
+  const place = await geocode(intent.place, { strict: intent.source !== 'claude' });
   if (!place) return null;
-  if (intent.kind === 'place') return { kind: 'place', heading: place.name, place, items: [] };
+  if (intent.kind === 'place') {
+    try {
+      await enrichPlace(place);
+    } catch (err) {
+      console.error('[places] enrich', intent.place, (err as Error).message);
+    }
+    return { kind: 'place', heading: place.name, place, items: [] };
+  }
   const category = CATEGORIES.find((c) => c.id === intent.category)!;
   const heading = `${category.label} ${place.name}`;
   let items: Attraction[] = [];
@@ -247,6 +269,7 @@ interface NominatimHit {
   display_name?: string;
   addresstype?: string;
   category?: string;
+  type?: string;
   importance?: number;
   osm_type?: string;
   osm_id?: number;
@@ -254,24 +277,25 @@ interface NominatimHit {
   extratags?: Record<string, string>;
 }
 
-export async function geocode(name: string): Promise<Place | null> {
-  const params = new URLSearchParams({ q: name, format: 'jsonv2', limit: '1', addressdetails: '1', extratags: '1', 'accept-language': 'en' });
+export async function geocode(name: string, opts: { strict?: boolean } = {}): Promise<Place | null> {
+  const params = new URLSearchParams({ q: name, format: 'jsonv2', limit: '3', addressdetails: '1', extratags: '1', 'accept-language': 'en' });
   const res = await fetch(`${config.nominatimUrl}/search?${params}`, {
     headers: { 'User-Agent': UA, Accept: 'application/json' },
     signal: AbortSignal.timeout(5_000),
   });
   if (!res.ok) throw new Error(`Nominatim responded ${res.status}`);
   const hits = (await res.json()) as NominatimHit[];
-  const h = hits[0];
+  const typeOf = (x: NominatimHit) => x.addresstype ?? x.category ?? '';
+  const h = (opts.strict === false ? hits.find((x) => PLACE_TYPES.has(typeOf(x))) ?? hits[0] : hits.find((x) => PLACE_TYPES.has(typeOf(x)))) ?? null;
   if (!h) return null;
-  const type = h.addresstype ?? h.category ?? '';
-  if (!PLACE_TYPES.has(type)) return null;
+  const type = typeOf(h);
   const bb = h.boundingbox?.map(Number) as [number, number, number, number] | undefined;
   const t = h.extratags ?? {};
   return {
     name: h.name || h.display_name?.split(',')[0] || name,
     displayName: h.display_name ?? name,
     type,
+    kindLabel: [h.category, h.type].filter((x) => x && x !== 'yes').join(' ').replace(/_/g, ' ') || undefined,
     lat: Number(h.lat),
     lon: Number(h.lon),
     bbox: bb && bb.every(Number.isFinite) ? bb : undefined,
@@ -279,8 +303,47 @@ export async function geocode(name: string): Promise<Place | null> {
     osmId: h.osm_id,
     wikidata: t.wikidata,
     wikipedia: t.wikipedia,
-    website: t.website,
+    website: t.website || t['contact:website'] || t.url,
+    phone: t.phone || t['contact:phone'],
+    openingHours: t.opening_hours,
   };
+}
+
+/**
+ * A single place's panel material: photo, one-line description and English
+ * article from Wikidata (one SPARQL query), then the article's first
+ * paragraph from Wikipedia's summary endpoint. Each step is optional.
+ */
+async function enrichPlace(place: Place): Promise<void> {
+  if (place.wikidata) {
+    const stub: Attraction = { name: place.name, lat: place.lat, lon: place.lon, kind: '', osmType: '', osmId: 0, wikidata: place.wikidata };
+    await enrich([stub]);
+    place.image = stub.image;
+    place.description = stub.description;
+    place.article = stub.article;
+  }
+  const article = place.article ?? (place.wikipedia ? wikipediaArticleUrl(place.wikipedia) : undefined);
+  if (!article) return;
+  const m = /^https:\/\/([a-z-]+)\.wikipedia\.org\/wiki\/(.+)$/i.exec(article);
+  if (!m) return;
+  const res = await fetch(`https://${m[1]}.wikipedia.org/api/rest_v1/page/summary/${m[2]}`, {
+    headers: { 'User-Agent': UA, Accept: 'application/json' },
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!res.ok) return;
+  const s = (await res.json()) as { extract?: string; description?: string; thumbnail?: { source?: string }; content_urls?: { desktop?: { page?: string } } };
+  if (s.extract) place.extract = s.extract.length > 420 ? s.extract.slice(0, 400).replace(/\s+\S*$/, '') + '…' : s.extract;
+  place.description ||= s.description;
+  place.image ||= s.thumbnail?.source;
+  place.article = s.content_urls?.desktop?.page ?? article;
+}
+
+/** OSM's "lang:Title" wikipedia tag as an article URL. */
+export function wikipediaArticleUrl(tag: string): string {
+  const m = /^([a-z-]{2,10}):(.+)$/i.exec(tag);
+  const lang = m ? m[1] : 'en';
+  const title = m ? m[2] : tag;
+  return `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`;
 }
 
 /** Rough size of a bounding box: the longer side in km. */

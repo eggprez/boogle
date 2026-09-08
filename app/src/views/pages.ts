@@ -50,7 +50,9 @@ export function resultsPage(opts: {
   overviewMode: OverviewMode;
   /** "Top stories" for the query (news.ts); empty when it is not in the news */
   stories?: SearxResult[];
-  /** the query asks for a place; the client fetches the card from /api/places */
+  /** the client should ask /api/places about this query */
+  placesOn?: boolean;
+  /** the patterns already know it is a list of places: draw the slot now */
   placesPending?: boolean;
 }): string {
   const { q, tab, page, data, settings, timeRange } = opts;
@@ -225,7 +227,7 @@ export function resultsPage(opts: {
   <a class="iconbtn" href="/settings" title="Settings" aria-label="Settings">${icons.gear}</a>
 </header>
 <nav class="tabs" aria-label="Result types">${tabs}${filters}</nav>
-<main class="results-layout" data-tab="${tab}">
+<main class="results-layout" data-tab="${tab}"${opts.placesOn ? ` data-places="1" data-q="${e(q)}"${aside ? ' data-infobox="1"' : ''}` : ''}>
   <div class="main-col">
     ${didYouMean}
     ${shortAnswers}
@@ -409,7 +411,7 @@ export function settingsPage(opts: {
       </label>
       <label class="row switch">
         <input type="checkbox" name="places"${chk(s.places)}>
-        <span><strong>Maps and places</strong><small>A map on knowledge panels for places, and an attractions card for queries like “things to do in Lisbon” or “museums in Tokyo”, from OpenStreetMap and Wikidata.</small></span>
+        <span><strong>Maps and places</strong><small>A knowledge panel with a map for a place (“denver”, “golden gate bridge”, a business) and a map-and-list card for “things to do in Lisbon” or “museums in Tokyo”, from OpenStreetMap, Wikidata and Wikipedia. Claude (Haiku, one short call, cached) decides whether a query is about a place.</small></span>
       </label>
       <label class="row switch">
         <input type="checkbox" name="openInNewTab"${chk(s.openInNewTab)}>

@@ -64,7 +64,8 @@ app/                   the Boogle web app (Node 24 + TypeScript + Hono)
   src/searxng.ts       SearXNG JSON API client (one retry, time-range filter, 5-minute memo)
   src/rank.ts          re-sorts SearXNG's results by score and caps results per host
   src/news.ts          "Top stories": the parallel news search and its freshness gate
-  src/places.ts        maps and attractions: place intent, Nominatim, Overpass, Wikidata, tile maths
+  src/places.ts        maps and attractions: place patterns, Nominatim, Overpass, Wikidata, tile maths
+  src/places-classify.ts asks Claude whether a query the patterns missed is about a place (cached)
   src/favicons.ts      favicon proxy with on-disk cache
   src/overview/        overview pipeline: pick sources → (deep: fetch + Readability) → claude -p → cache
   src/views/           server-rendered HTML
@@ -261,6 +262,7 @@ a cache-clear button, the keyboard shortcuts, and the bang list. Settings are st
 | `REDDIT_WEIGHT` | `0.8` | engine weight Reddit threads get when merged into the ranking |
 | `TOP_STORIES` | `true` | run the news search for the "Top stories" strip (users can also switch it off in Settings) |
 | `PLACES` | `true` | maps and attractions cards (also a per-user setting) |
+| `PLACES_MODEL` | `haiku` | Claude model that decides whether a query is about a place |
 | `NOMINATIM_URL` | `https://nominatim.openstreetmap.org` | geocoder for place queries |
 | `OVERPASS_URL` | `https://overpass-api.de/api/interpreter` | Overpass API for the attractions list |
 | `OVERPASS_FALLBACK_URL` | *(empty)* | second Overpass server tried when the first fails; the public mirrors tend to hang, so it is off |
@@ -289,14 +291,35 @@ strip. It adds one fan-out to Google News, Brave News and Bing News per web
 search; those are separate engines with their own suspension timers, so a
 burst does not affect the web engines.
 
-**Places.** `places.ts` recognises two kinds of query with regular
-expressions, no network: *category in place* (things to do / attractions /
-museums / restaurants / cafés / bars / hotels / parks / beaches, in or near
-somewhere; also "Lisbon attractions") and *map of / where is / X map*. The
-results page then leaves a slot that `app.js` fills from `/api/places`, so
-the map services never hold the results up. That endpoint geocodes the place
-with Nominatim (only address types that are places count, which is what
-keeps "things to do in case of fire" out), asks Overpass for named features
+**Places.** Two questions have to be answered: is this query about a place,
+and what is there. The first is answered in two stages. `places.ts` matches
+the obvious shapes with regular expressions, no network: *category in place*
+(things to do / attractions / museums / restaurants / cafés / bars / hotels /
+parks / beaches, in or near somewhere; also "Lisbon attractions") and *map of
+/ where is / X map*. Everything else that could plausibly be a place (up to
+eight words, no code or URL fragments, not a plain how-to question) goes to
+`places-classify.ts`, which asks Claude Haiku through the same CLI as the
+overview: one short completion, no tools, a JSON verdict with the place's
+name written for a geocoder ("Denver, Colorado", "Eiffel Tower, Paris"), its
+kind, and a category when the query asks for venues around a place in words
+the patterns miss ("fun stuff for kids around denver"). Claude knows that
+"paris hilton", "boston dynamics", "history of rome" and "mercury" are not
+places and that "phoenix" and "yosemite" are. The verdict is cached on disk
+with the overviews, so a query costs at most one small Claude call ever, and
+a CLI failure just means no card.
+
+The results page asks `/api/places` from `app.js` after it has loaded, so
+neither Claude nor the map services ever hold the results up. A single place
+comes back as a knowledge panel for the right column (photo, what it is, the
+first paragraph from Wikipedia, a map, address, hours, phone, website,
+directions), placed above the overview's sources panel; when SearXNG already
+supplied a knowledge panel the page says so and no second one is sent. A
+category comes back as a map-and-list card for the main column; when the
+patterns recognised the query, the page draws that card's skeleton at once.
+The endpoint geocodes the place with Nominatim (on the pattern path only
+address types that are places count, which is what keeps "things to do in
+case of fire" out; on the Claude path any hit for the name it gave will do,
+so businesses work), asks Overpass for named features
 with the category's tags in a box sized to the place (2–15 km for
 attractions, 1–4 km for restaurants), ranks them (Wikidata-linked and
 Wikipedia-linked first, then the well-described), and runs one Wikidata

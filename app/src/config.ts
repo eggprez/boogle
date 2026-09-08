@@ -46,6 +46,8 @@ export const config = {
   // Places: maps and attractions from OpenStreetMap (see places.ts). The
   // three services are public and keyless; override to self-host them.
   places: bool('PLACES', true),
+  // Claude model that decides whether a query is about a place (places-classify.ts).
+  placesModel: (['haiku', 'sonnet', 'opus'].includes(str('PLACES_MODEL', 'haiku')) ? str('PLACES_MODEL', 'haiku') : 'haiku') as 'haiku' | 'sonnet' | 'opus',
   nominatimUrl: str('NOMINATIM_URL', 'https://nominatim.openstreetmap.org').replace(/\/+$/, ''),
   overpassUrl: str('OVERPASS_URL', 'https://overpass-api.de/api/interpreter'),
   // A second Overpass server to try when the first fails. Off by default:

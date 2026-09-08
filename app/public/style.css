@@ -791,3 +791,18 @@ body.lb-open { overflow: hidden; }
 .places-retry { display: inline-flex; align-items: center; gap: 5px; margin-left: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border-2); background: var(--card); color: var(--fg); font: inherit; font-size: 0.8125rem; font-weight: 500; cursor: pointer; transition: all 0.15s; }
 .places-retry:hover { border-color: var(--accent-2); color: var(--accent-ink); background: var(--accent-soft); }
 .places-retry svg { width: 13px; height: 13px; }
+
+/* one place: a knowledge panel in the right column, possibly above the overview's sources panel */
+@media (min-width: 1101px) {
+  .results-layout .main-col { grid-row: 1 / span 4; }
+  .results-layout .side-col { grid-column: 2; }
+  .place-side { margin-bottom: 18px; }
+}
+.place-panel .ib-title { margin-bottom: 2px; }
+.place-kind { margin: 0 0 10px; color: var(--muted); font-size: 0.8125rem; }
+.place-panel .ib-content { font-size: 0.8438rem; line-height: 1.55; }
+.place-panel .ib-attrs { margin-top: 12px; }
+.place-panel .ib-attr dd { overflow-wrap: anywhere; }
+.place-panel .place-links { padding: 12px 0 0; }
+.place-panel .chips { margin-top: 12px; }
+.place-panel .ib-img { max-height: clamp(180px, 14vw, 260px); width: 100%; object-fit: cover; }
