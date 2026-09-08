@@ -1,7 +1,27 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { config } from '../config.js';
 import type { Settings } from '../settings.js';
 import type { Tab } from '../searxng.js';
 import { e, icons } from './html.js';
+
+/**
+ * Content hash of the static assets, appended to their URLs so a browser (or a
+ * caching reverse proxy) never pairs a new page with a stylesheet or script
+ * cached from an older build.
+ */
+export const ASSET_VERSION = (() => {
+  const h = createHash('sha256');
+  for (const f of ['style.css', 'app.js', 'markdown.js']) {
+    try {
+      h.update(readFileSync(new URL(`../../public/${f}`, import.meta.url)));
+    } catch {
+      h.update(f);
+    }
+  }
+  return h.digest('hex').slice(0, 8);
+})();
+const asset = (f: string) => `/static/${f}?v=${ASSET_VERSION}`;
 
 export function layout(opts: {
   title: string;
@@ -22,10 +42,10 @@ export function layout(opts: {
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="search" type="application/opensearchdescription+xml" title="${e(config.siteName)}" href="/opensearch.xml">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="${asset('style.css')}">
 <style>:root{--accent:${e(config.accent)};}</style>
-<script src="/static/markdown.js" defer></script>
-<script src="/static/app.js" defer></script>
+<script src="${asset('markdown.js')}" defer></script>
+<script src="${asset('app.js')}" defer></script>
 </head>
 <body class="${e(opts.bodyClass ?? '')}">
 ${opts.body}

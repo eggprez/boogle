@@ -18,6 +18,13 @@ import { homePage, resultsPage, settingsPage } from './views/pages.js';
 const app = new Hono<AppEnv>();
 
 // ---- unauthenticated: static assets, health, OpenSearch descriptor ---------
+// Asset URLs carry ?v=<content hash> (see views/layout.ts): a versioned URL can
+// be cached forever, an unversioned one must be revalidated so a proxy cache
+// never keeps an old build's CSS alive after a deploy.
+app.use('/static/*', async (c, next) => {
+  await next();
+  if (c.res.ok) c.res.headers.set('Cache-Control', c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache');
+});
 app.use('/static/*', serveStatic({ root: './public', rewriteRequestPath: (p) => p.replace(/^\/static/, '') }));
 app.get('/favicon.ico', (c) => c.redirect('/static/favicon.svg'));
 app.get('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /\n'));
