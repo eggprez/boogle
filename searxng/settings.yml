@@ -88,8 +88,14 @@ engines:
   - name: google
     disabled: false
     weight: 2.0
+  # Set GOOGLE_CSE_ID on the container to search with your own Programmable
+  # Search Engine (programmablesearchengine.google.com, "search the entire
+  # web"). The placeholder line is filled in, or dropped, by entrypoint.sh.
+  # Without it SearXNG's shared public ID is used, which Google rate-limits
+  # for everyone at once ("unusual traffic" -> engine suspended).
   - name: google cse
     weight: 1.5
+    CX: "__GOOGLE_CSE_ID__"
   - name: brave
     weight: 1.0
   - name: bing
@@ -106,14 +112,24 @@ engines:
   - name: duckduckgo
     disabled: true            # CAPTCHA on every request; DDG results are Bing's anyway
 
-  # Reddit. SearXNG removed its Reddit engine and reddit.com answers 403/429
-  # to server requests, so this uses the PullPush archive API (a public mirror
-  # of Reddit posts). Coverage is good, ranking is by score, freshness lags a
-  # bit. Reddit threads also keep arriving via Google/Brave/Bing.
+  # Reddit, two ways. With REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET set on the
+  # container (a free "script" app from reddit.com/prefs/apps) the official
+  # API engine below runs and the archive fallback is switched off by
+  # entrypoint.sh. Without credentials the official engine is not loaded and
+  # search goes through pullpush.io, a third-party archive that rate-limits
+  # hard (HTTP 429 -> suspended). Reddit threads also keep arriving via
+  # Google/Brave/Bing either way.
   - name: reddit
-    engine: json_engine
+    engine: reddit_oauth
     shortcut: re
     categories: [general, social media]
+    weight: 0.8
+    timeout: 6.0
+  - name: reddit archive
+    engine: json_engine
+    shortcut: rea
+    categories: [general, social media]
+    disabled: false  # boogle:reddit-fallback
     search_url: https://api.pullpush.io/reddit/search/submission/?q={query}&size=20&sort=desc&sort_type=score
     results_query: data
     url_query: permalink
@@ -123,21 +139,10 @@ engines:
     weight: 0.6
     timeout: 5.0
     about:
-      website: https://www.reddit.com
-      official_api_documentation: https://pullpush.io
+      website: https://pullpush.io
+      use_official_api: false
+      require_api_key: false
       results: JSON
-
-  # Optional, best quality: Reddit through your own free Google Programmable
-  # Search Engine restricted to reddit.com. Create one at
-  # https://programmablesearchengine.google.com (sites to search: reddit.com),
-  # copy its "Search engine ID" into cx below, and set disabled: false.
-  # - name: reddit via google
-  #   engine: google_cse
-  #   shortcut: rg
-  #   categories: [general, social media]
-  #   cx: "YOUR_SEARCH_ENGINE_ID"
-  #   weight: 1.0
-  #   disabled: true
 
   # Stack Overflow: the Stack Exchange API allows 300 anonymous requests a
   # day per IP and SearXNG's engine has no way to use a key, so it spent most
@@ -157,6 +162,7 @@ engines:
   # ------------------------------------------------------------- images ----
   - name: google cse images
     weight: 2.0
+    CX: "__GOOGLE_CSE_ID__"
   - name: startpage images
     weight: 1.5
   - name: brave.images
