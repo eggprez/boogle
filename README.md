@@ -51,11 +51,13 @@ app/                   the Boogle web app (Node 24 + TypeScript + Hono)
   Dockerfile           builds the app and installs @anthropic-ai/claude-code
   src/server.ts        routes: /, /search, /api/overview (SSE), /api/followup (SSE), /favicon, /suggest, /settings, /opensearch.xml
   src/searxng.ts       SearXNG JSON API client (one retry, time-range filter, 5-minute memo)
+  src/rank.ts          re-sorts SearXNG's results by score and caps results per host
   src/favicons.ts      favicon proxy with on-disk cache
   src/overview/        overview pipeline: pick sources → (deep: fetch + Readability) → claude -p → cache
   src/views/           server-rendered HTML
   public/              CSS, client JS (streaming, follow-ups, keyboard nav, lightbox), markdown renderer, favicon
   test/                Vitest unit tests + a stub SearXNG used by the CI smoke test
+  scripts/             search-eval.mjs + eval-queries.json: measure engine health and result quality
 ```
 
 ## Deploy on TrueNAS SCALE (prebuilt images, nothing to copy)
@@ -316,21 +318,97 @@ overviews, or to any script that speaks the `stream-json` format for testing.
 No SearXNG handy? `node app/test/stub-searxng.mjs` serves canned results on
 `:9999`; point `SEARXNG_URL` at it. `npm test` runs the unit tests.
 
+## Search quality: how results are ranked
+
+The app shows SearXNG's merged list, re-sorted once. SearXNG asks every
+enabled engine for the tab, dedupes by URL, and scores each page as
+
+```
+score = (product of the weights of the engines that returned it)
+      × (number of engines that returned it)
+      × Σ 1/position, summed over those engines
+```
+
+Two things fall out of that formula. Agreement beats weight: a page two
+engines both list at position 3 outscores a page only Google lists at
+position 1, so the engine mix matters more than the weights. And position
+decays fast: rank 1 is worth ten times rank 10.
+
+SearXNG then runs a grouping pass that clusters results by (category,
+template, has-thumbnail). In the web tab it pushes every result that carries a
+page thumbnail behind up to eight thumbnail-less ones, so a score-5 page
+routinely shows up tenth behind score-0.6 pages. `app/src/rank.ts` restores
+the score order and applies a soft per-host cap (a site's third and later
+results move to the end of the page, like Google's site collapse). Both the
+results page and the overview's source picker see the reranked list.
+
+### Engine findings (September 2026)
+
+- **google** (google.com HTML) answers in ~0.4 s and is the ranking to
+  imitate, so it carries the top weight. It trips a CAPTCHA under bursts of
+  rapid queries, after which SearXNG benches it; `suspended_times` in
+  `searxng/settings.yml` is shortened so it comes back within minutes rather
+  than an hour. **google cse** is a second Google-derived list, so pages on
+  both get the agreement bonus.
+- **brave** is the closest independent index to Google (about half of its
+  top ten overlaps). **bing** is independent too. **yahoo** returns Bing's
+  list (98% overlap) and is left off. **yandex** is independent and overlaps
+  Google only ~20%, so it runs at a low weight as a tie-breaker; set
+  `disabled: true` on it if you would rather not send queries there.
+- **startpage** switched to Bing's index and SearXNG's parser currently
+  returns nothing from it, so it is off. **duckduckgo**, **qwant** and
+  **mojeek** answer server requests with a CAPTCHA or access-denied page.
+- **reddit** adds threads Google would surface, at low weight: through the
+  official API with your own credentials (`REDDIT_CLIENT_ID` and secret), or
+  the PullPush mirror, which rate-limits, without them. **stackoverflow** is
+  off: the Stack Exchange API allows 300 anonymous requests a day per IP, so
+  the engine spent most of its time benched, and Google lists the same
+  threads.
+- The `hostnames` plugin sinks pinterest, facebook and quora to the end of
+  the page; add your own patterns there to demote or boost sites.
+
+### Measuring a change
+
+`app/scripts/search-eval.mjs` runs a query set against a SearXNG instance and
+reports numbers instead of impressions:
+
+```bash
+cd app && npm run eval -- engines --url http://127.0.0.1:8888
+```
+
+shows, per engine, how often it answered, how many results it returned,
+latency, and a top-10 overlap matrix that reveals which engines share an
+index.
+
+```bash
+cd app && npm run eval -- merged --url http://127.0.0.1:8888 --save /tmp/run-a
+```
+
+runs the merged search and reports hit@1/3/5 and MRR against the expected
+sites in `app/scripts/eval-queries.json`, both in SearXNG's order and after
+the app's reranker, plus multi-engine agreement, grouping-pass displacement,
+host concentration, latency, and which engines filled the top ten. Save two
+runs and `npm run eval -- compare /tmp/run-a /tmp/run-b` prints them side by
+side. Queries are paced (`--delay`, default 1.5 s) because every upstream
+rate-limits bursts; a fast loop over 35 queries gets Google, Brave, Reddit and
+Stack Overflow benched for minutes. Edit the query file to match what you
+actually search for.
+
 ## Customising
 
 - **Bangs**: edit the table in `app/src/bangs.ts`.
 - **Engines**: the `engines:` block in `searxng/settings.yml` is tuned for
-  Google-like results: Google CSE weighted highest, then Startpage, Brave and
-  Bing, plus Reddit in web results; Stack Overflow (API quota too small),
-  translators, icon libraries, stock photo sites and broken video engines are
-  off; every engine
-  is capped at 5 s. Flip `disabled` on any entry to change the mix; SearXNG's
+  Google-like results: Google weighted highest, then Google CSE, Brave and
+  Bing, plus Reddit in web results; translators, icon
+  libraries, stock photo sites and broken video engines are off; every engine
+  is capped at 5 s. Flip `disabled` on any entry to change the mix, then
+  measure it with the eval script (see "Search quality" above); SearXNG's
   defaults apply to everything unlisted.
-- **DuckDuckGo** is off on purpose: its HTML endpoint answers every
-  server-side request with a CAPTCHA, and its results are Bing's index anyway,
-  so Bing is enabled directly instead. SearXNG upstream periodically repairs
-  the DDG engine; if you want to retry it after pulling a newer image, set
-  `disabled: false` on `duckduckgo` and watch the Status page.
+- **DuckDuckGo and Startpage** are off on purpose: DDG answers every
+  server-side request with a CAPTCHA and its results are Bing's index anyway,
+  and Startpage now serves Bing results that SearXNG's parser cannot read.
+  SearXNG upstream periodically repairs engines; to retry one after pulling a
+  newer image, set `disabled: false` and check `npm run eval -- engines`.
 - **Reddit** blocks direct server requests (403, then 429 on its RSS feeds),
   and SearXNG dropped its Reddit engine. The `reddit` entry therefore queries
   the PullPush archive API, a public mirror of Reddit posts ranked by score.
@@ -344,6 +422,7 @@ No SearXNG handy? `node app/test/stub-searxng.mjs` serves canned results on
   `docker compose build searxng` after pulling a new upstream image.
 - **Prompt**: `SYSTEM_PROMPT` in `app/src/overview/claude.ts`. Cached
   overviews are keyed on a hash of it, so a change takes effect immediately.
+- **Result order**: `app/src/rank.ts` (score sort, per-host cap).
 - **Overview source picking**: `app/src/overview/sources.ts` (per-host cap,
   hosts skipped in deep mode).
 - **Look**: `app/public/style.css`; the accent is the `--accent` variable.

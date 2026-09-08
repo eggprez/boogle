@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import { rankResults } from './rank.js';
 
 export type Tab = 'web' | 'images' | 'news' | 'videos';
 export const TABS: Tab[] = ['web', 'images', 'news', 'videos'];
@@ -104,7 +105,9 @@ export function search(q: string, tab: Tab, page: number, opts: SearchOptions): 
     let lastErr: Error | null = null;
     for (const timeout of ATTEMPT_TIMEOUTS_MS) {
       try {
-        return await fetchSearch(params, timeout);
+        const data = await fetchSearch(params, timeout);
+        data.results = rankResults(data.results, tab);
+        return data;
       } catch (err) {
         lastErr = err as Error;
         if (!isRetryable(lastErr)) break;

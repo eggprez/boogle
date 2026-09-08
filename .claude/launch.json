@@ -10,6 +10,16 @@
       ],
       "port": 8081,
       "autoPort": true
+    },
+    {
+      "name": "boogle-searxng",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd app && AUTH_MODE=none SEARXNG_URL=${SEARXNG_URL:-http://127.0.0.1:8888} DATA_DIR=/tmp/boogle-dev-data-$PORT PUBLIC_URL=http://localhost:$PORT CLAUDE_BIN=$PWD/test/fake-claude.mjs node dist/server.js"
+      ],
+      "port": 8082,
+      "autoPort": true
     }
   ]
 }

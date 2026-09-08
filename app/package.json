@@ -9,7 +9,8 @@
     "start": "node dist/server.js",
     "dev": "tsc -p tsconfig.json && node --watch dist/server.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "eval": "node scripts/search-eval.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.0",

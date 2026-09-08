@@ -15,7 +15,7 @@
 #   web    google (google.com HTML) answers every query in ~0.4 s and is the
 #          ranking to imitate, so it carries the top weight. Google CSE is a
 #          second Google-derived list, so pages on both get the agreement
-#          bonus. Brave and Bing are independent indexes. Startpage switched
+#          bonus. Brave, Bing and Yandex are independent indexes. Startpage switched
 #          to Bing's index and SearXNG's parser currently returns nothing from
 #          it; DuckDuckGo, Qwant and Mojeek answer server requests with a
 #          CAPTCHA or an access-denied page. Reddit is pulled into web
@@ -95,6 +95,12 @@ engines:
   - name: bing
     disabled: false           # stands in for DuckDuckGo (same underlying index)
     weight: 1.0
+  # Independent index; agrees with Google on ~20% of a top ten, so it mostly
+  # acts as a tie-breaker. The low weight keeps its own picks near the bottom
+  # of the page (measured: about half a Yandex-only result per page).
+  - name: yandex
+    disabled: false
+    weight: 0.5
   - name: startpage
     disabled: true            # now serves Bing's index, and SearXNG's parser returns nothing from it (2026-09)
   - name: duckduckgo
