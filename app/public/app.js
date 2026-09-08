@@ -644,6 +644,48 @@
   // decides), and a card that comes back is placed by its data-place: a list
   // of places at the top of the main column, one place as a panel in the
   // right column, where a knowledge panel would sit.
+  // The browser's position is used first when it can share one (a secure
+  // page, permission granted); the server falls back to the home location
+  // from Settings. A fresh fix is kept for twenty minutes per device.
+  const GEO_KEY = 'boogle.geo';
+  const GEO_DENIED = 'boogle.geo.denied';
+  const storedGeo = () => {
+    try {
+      const g = JSON.parse(localStorage.getItem(GEO_KEY) || 'null');
+      return g && Number.isFinite(g.lat) && Number.isFinite(g.lon) ? g : null;
+    } catch { return null; }
+  };
+  const storeGeo = (pos) => {
+    try {
+      localStorage.setItem(GEO_KEY, JSON.stringify({ lat: pos.coords.latitude, lon: pos.coords.longitude, at: Date.now() }));
+      localStorage.removeItem(GEO_DENIED);
+    } catch { /* private mode */ }
+  };
+  function browserGeo({ ask = true, timeout = 4000 } = {}) {
+    const g = storedGeo();
+    if (g && Date.now() - g.at < 20 * 60e3) return Promise.resolve(g);
+    let denied = false;
+    try { denied = localStorage.getItem(GEO_DENIED) === '1'; } catch { /* */ }
+    if (!ask || !navigator.geolocation || !window.isSecureContext || denied) return Promise.resolve(g);
+    return new Promise((resolve) => {
+      // Chrome's own timeout only starts once permission is granted, so an
+      // unanswered prompt would stall the card forever: a hard timer moves on
+      // with the fallback, and a fix that arrives later is kept for next time.
+      let done = false;
+      const settle = (v) => { if (!done) { done = true; resolve(v); } };
+      setTimeout(() => settle(g), timeout);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => { storeGeo(pos); settle(storedGeo()); },
+        (err) => {
+          if (err.code === err.PERMISSION_DENIED) { try { localStorage.setItem(GEO_DENIED, '1'); } catch { /* */ } }
+          settle(g);
+        },
+        { timeout, maximumAge: 10 * 60e3, enableHighAccuracy: false },
+      );
+    });
+  }
+  // (after the helpers above: the calls run at once, and const bindings
+  // declared later in this block would not be initialised yet)
   const placesSlot = document.getElementById('places');
   const resultsLayout = document.querySelector('.results-layout');
   if (placesSlot && placesSlot.dataset.q !== undefined && !placesSlot.dataset.loaded) loadPlaces(placesSlot);
@@ -652,6 +694,8 @@
   async function loadPlaces(slot, retry) {
     const q = slot ? slot.dataset.q : resultsLayout.dataset.q;
     const params = new URLSearchParams({ q });
+    const geo = await browserGeo();
+    if (geo) { params.set('lat', geo.lat.toFixed(4)); params.set('lon', geo.lon.toFixed(4)); }
     if (retry) params.set('retry', '1');
     if (resultsLayout?.dataset.infobox === '1') params.set('infobox', '1');
     try {
@@ -711,6 +755,37 @@
       el.addEventListener('mouseleave', () => card(i)?.classList.remove('hot'));
       el.addEventListener('click', () => card(i)?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }));
     }
+  }
+
+  /* ------------------------------------------------ settings: location */
+  const geoBtn = document.getElementById('geo-btn');
+  if (geoBtn) {
+    const status = document.getElementById('geo-status');
+    const forget = document.getElementById('geo-forget');
+    const show = () => {
+      const g = storedGeo();
+      if (g) {
+        status.textContent = `Using this device's location: ${g.lat.toFixed(3)}, ${g.lon.toFixed(3)} (from ${new Date(g.at).toLocaleTimeString()}). Stored only in this browser.`;
+        forget.hidden = false;
+      } else if (!navigator.geolocation || !window.isSecureContext) {
+        status.textContent = 'Not available here: browsers share a location only on HTTPS or localhost. The home location below is used instead.';
+        geoBtn.disabled = true;
+      } else {
+        status.textContent = 'Not shared yet. Search pages ask once; or use the button.';
+        forget.hidden = true;
+      }
+    };
+    show();
+    geoBtn.addEventListener('click', () => {
+      status.textContent = 'Asking the browser…';
+      try { localStorage.removeItem(GEO_DENIED); } catch { /* */ }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => { storeGeo(pos); show(); },
+        (err) => { status.textContent = err.code === err.PERMISSION_DENIED ? 'Permission denied in the browser. The home location below is used instead.' : `Could not get a position (${err.message}).`; },
+        { timeout: 10000, maximumAge: 0 },
+      );
+    });
+    forget.addEventListener('click', () => { try { localStorage.removeItem(GEO_KEY); } catch { /* */ } show(); });
   }
 
   /* ------------------------------------------------- keyboard navigation */

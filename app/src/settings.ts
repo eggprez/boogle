@@ -25,6 +25,13 @@ export interface Settings {
   openInNewTab: boolean;
   topStories: boolean; // "Top stories" strip on the web tab when the query is in the news
   places: boolean; // maps and attractions from OpenStreetMap
+  /** home location as typed ("Denver, CO" or "39.74, -104.99"); the fallback when the browser shares no position */
+  home: string;
+  homeLat: number | null;
+  homeLon: number | null;
+  /** what the geocoder made of it: "Denver, Colorado" */
+  homeLabel: string;
+  units: 'km' | 'mi';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -37,6 +44,11 @@ export const DEFAULT_SETTINGS: Settings = {
   openInNewTab: false,
   topStories: true,
   places: true,
+  home: '',
+  homeLat: null,
+  homeLon: null,
+  homeLabel: '',
+  units: 'km',
 };
 
 export const MODELS: { id: Model; label: string; blurb: string }[] = [
@@ -71,6 +83,15 @@ export function sanitize(input: Partial<Record<keyof Settings, unknown>>): Setti
   s.openInNewTab = toBool(input.openInNewTab, s.openInNewTab);
   s.topStories = toBool(input.topStories, s.topStories);
   s.places = toBool(input.places, s.places);
+  if (typeof input.home === 'string') s.home = input.home.replace(/[\u0000-\u001f]/g, '').trim().slice(0, 120);
+  const lat = Number(input.homeLat);
+  const lon = Number(input.homeLon);
+  if (input.homeLat !== null && input.homeLat !== undefined && input.homeLat !== '' && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+    s.homeLat = lat;
+    s.homeLon = lon;
+  }
+  if (typeof input.homeLabel === 'string') s.homeLabel = input.homeLabel.slice(0, 120);
+  if (input.units === 'km' || input.units === 'mi') s.units = input.units;
   s.overviewMode = parseMode(input.overviewMode, s.overviewMode);
   if (MODELS.some((m) => m.id === input.model)) s.model = input.model as Model;
   if (input.theme === 'system' || input.theme === 'light' || input.theme === 'dark') s.theme = input.theme;

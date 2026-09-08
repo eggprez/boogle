@@ -1,18 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { bboxKm, buildMap, commonsThumb, fitZoom, geoFromInfoboxUrls, placeIntent, project, rankAttractions } from '../src/places.js';
+import { bboxKm, buildMap, commonsThumb, distanceKm, fitZoom, geoFromInfoboxUrls, placeIntent, project, rankAttractions, validFilter } from '../src/places.js';
 
 describe('placeIntent', () => {
   it('recognises "category in place" queries', () => {
-    const p = { source: 'pattern' };
-    expect(placeIntent('things to do in Lisbon')).toEqual({ kind: 'attractions', category: 'attractions', place: 'Lisbon', ...p });
-    expect(placeIntent('best museums in new york')).toEqual({ kind: 'attractions', category: 'museums', place: 'new york', ...p });
-    expect(placeIntent('Top 10 restaurants near Tokyo')).toEqual({ kind: 'attractions', category: 'restaurants', place: 'Tokyo', ...p });
-    expect(placeIntent('what to see in Paris?')).toEqual({ kind: 'attractions', category: 'attractions', place: 'Paris', ...p });
-    expect(placeIntent('hotels in the Algarve')).toEqual({ kind: 'attractions', category: 'hotels', place: 'Algarve', ...p });
+    expect(placeIntent('things to do in Lisbon')).toMatchObject({ kind: 'list', category: 'attractions', label: 'Things to do', place: 'Lisbon', source: 'pattern' });
+    expect(placeIntent('things to do in Lisbon')?.filters).toHaveLength(2);
+    expect(placeIntent('best museums in new york')).toMatchObject({ kind: 'list', category: 'museums', place: 'new york' });
+    expect(placeIntent('Top 10 restaurants near Tokyo')).toMatchObject({ kind: 'list', category: 'restaurants', place: 'Tokyo' });
+    expect(placeIntent('what to see in Paris?')).toMatchObject({ kind: 'list', category: 'attractions', place: 'Paris' });
+    expect(placeIntent('hotels in the Algarve')).toMatchObject({ kind: 'list', category: 'hotels', place: 'Algarve' });
   });
   it('recognises "place category" queries', () => {
-    expect(placeIntent('lisbon attractions')).toEqual({ kind: 'attractions', category: 'attractions', place: 'lisbon', source: 'pattern' });
-    expect(placeIntent('Porto best beaches')).toEqual({ kind: 'attractions', category: 'beaches', place: 'Porto', source: 'pattern' });
+    expect(placeIntent('lisbon attractions')).toMatchObject({ kind: 'list', category: 'attractions', place: 'lisbon' });
+    expect(placeIntent('Porto best beaches')).toMatchObject({ kind: 'list', category: 'beaches', place: 'Porto' });
+  });
+  it('recognises lists around the user', () => {
+    expect(placeIntent('restaurants near me')).toMatchObject({ kind: 'list', category: 'restaurants', place: '' });
+    expect(placeIntent('coffee shops')).toMatchObject({ kind: 'list', category: 'cafes', place: '' });
+    expect(placeIntent('best bars nearby')).toMatchObject({ kind: 'list', category: 'bars', place: '' });
+    expect(placeIntent('parks around here')).toMatchObject({ kind: 'list', category: 'parks', place: '' });
   });
   it('recognises map and location queries', () => {
     expect(placeIntent('map of Berlin')).toEqual({ kind: 'place', place: 'Berlin', source: 'pattern' });
@@ -20,7 +26,7 @@ describe('placeIntent', () => {
     expect(placeIntent('Oslo map')).toEqual({ kind: 'place', place: 'Oslo', source: 'pattern' });
   });
   it('leaves other queries alone', () => {
-    for (const q of ['python list comprehension', 'things to do in case of fire', 'restaurants near me', 'how to bar a door', 'parks and recreation cast', 'bars', 'in']) {
+    for (const q of ['python list comprehension', 'things to do in case of fire', 'how to bar a door', 'parks and recreation cast', 'in', 'bar']) {
       expect(placeIntent(q), q).toBeNull();
     }
   });
@@ -96,5 +102,36 @@ describe('boxAround', () => {
     const [s, w, n, e] = boxAround(60, 10, 11.1).split(',').map(Number);
     expect(n - s).toBeCloseTo(0.2, 3);
     expect(e - w).toBeCloseTo(0.4, 2);
+  });
+});
+
+describe('validFilter', () => {
+  it('accepts chains of clauses on known keys', () => {
+    expect(validFilter('["amenity"="restaurant"]["cuisine"~"pizza"]')).toBe('["amenity"="restaurant"]["cuisine"~"pizza"]');
+    expect(validFilter('["shop"~"^(hardware|doityourself)$"]')).toBeTruthy();
+    expect(validFilter('["name"~"Trader Joe\'s"]')).toBeTruthy();
+  });
+  it('rejects unknown keys, bad syntax, and injection attempts', () => {
+    expect(validFilter('["password"="x"]')).toBeNull();
+    expect(validFilter('["amenity"="restaurant"];out body;')).toBeNull();
+    expect(validFilter('amenity=restaurant')).toBeNull();
+    expect(validFilter('["amenity"="a"]["b"="c"]["cuisine"="d"]["shop"="e"]')).toBeNull();
+    expect(validFilter(42)).toBeNull();
+    expect(validFilter('')).toBeNull();
+  });
+});
+
+describe('distanceKm', () => {
+  it('measures Lisbon to Porto at about 274 km', () => {
+    expect(distanceKm({ lat: 38.7223, lon: -9.1393 }, { lat: 41.1579, lon: -8.6291 })).toBeCloseTo(274, -1);
+  });
+  it('ranks nearer places first around the user', () => {
+    const els = [
+      { type: 'node', id: 1, lat: 38.75, lon: -9.14, tags: { name: 'Far', amenity: 'cafe', website: 'https://x' } },
+      { type: 'node', id: 2, lat: 38.7225, lon: -9.139, tags: { name: 'Near', amenity: 'cafe' } },
+    ];
+    const ranked = rankAttractions(els, { lat: 38.7223, lon: -9.1393 });
+    expect(ranked[0].name).toBe('Near');
+    expect(ranked[0].distanceKm).toBeLessThan(0.1);
   });
 });

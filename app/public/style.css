@@ -806,3 +806,15 @@ body.lb-open { overflow: hidden; }
 .place-panel .place-links { padding: 12px 0 0; }
 .place-panel .chips { margin-top: 12px; }
 .place-panel .ib-img { max-height: clamp(180px, 14vw, 260px); width: 100%; object-fit: cover; }
+
+/* the user's own position on a map, and distances on cards */
+.pin-you { transform: translate(-50%, -50%); z-index: 1; filter: none; }
+.pin-you i { display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--accent-3); border: 3px solid #fff; box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-3) 30%, transparent), 0 2px 6px rgba(0, 0, 0, 0.35); }
+.place-dist { position: absolute; right: 6px; bottom: 6px; display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; border-radius: 999px; background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 0.6875rem; font-weight: 600; }
+.place-dist svg { width: 11px; height: 11px; }
+.places-empty a { color: var(--accent-ink); font-weight: 500; }
+.places-empty svg { width: 14px; height: 14px; vertical-align: -2px; color: var(--accent-ink); }
+.section-note { margin: -4px 0 12px; color: var(--muted); font-size: 0.8438rem; line-height: 1.5; }
+.geo-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.settings-form input[type="text"] { font: inherit; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border-2); background: var(--card); color: var(--fg); min-width: 220px; }
+.settings-form input[type="text"]:focus { outline: 2px solid var(--accent-2); outline-offset: 1px; border-color: transparent; }

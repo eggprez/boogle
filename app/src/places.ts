@@ -1,23 +1,23 @@
 import { config } from './config.js';
 
-// Places: the map-and-attractions card Google shows for "things to do in
-// Lisbon" or "museums in Tokyo", built from three keyless OpenStreetMap
-// services. Nominatim turns the place name into coordinates and a bounding
-// box, the Overpass API lists named features with the right tags around
-// that point, and one Wikidata SPARQL query adds a photo, a one-line
-// description and a Wikipedia link to the ones that have them. Everything is
-// memoised for a day: the same query a second time costs nothing upstream.
+// Places: the map cards Google shows for a place ("denver", "golden gate
+// bridge", a business), for a kind of place somewhere ("things to do in
+// Lisbon", "sushi in Austin") and for a kind of place around the user
+// ("pizza", "dog parks near me"). Built from three keyless OpenStreetMap
+// services: Nominatim turns a name into coordinates and a bounding box, the
+// Overpass API lists named features with the right tags in a box, and one
+// Wikidata SPARQL query adds a photo, a one-line description and a Wikipedia
+// link to the ones that have them. Everything is memoised for a day.
 //
-// A bare place query ("lisbon") needs none of this: SearXNG's Wikidata
-// infobox already carries an OpenStreetMap link with coordinates, and
-// geoFromInfoboxUrls() reads it.
+// Whether a query is about a place is decided in two stages: the patterns
+// here (free) and, for everything else, Claude (places-classify.ts).
 
 export type CategoryId = 'attractions' | 'museums' | 'restaurants' | 'cafes' | 'bars' | 'hotels' | 'parks' | 'beaches';
 export const CATEGORY_IDS: CategoryId[] = ['attractions', 'museums', 'restaurants', 'cafes', 'bars', 'hotels', 'parks', 'beaches'];
 
 interface Category {
   id: CategoryId;
-  /** heading, with the place name appended */
+  /** list heading noun */
   label: string;
   /** what people type; matched as a whole phrase */
   words: string;
@@ -29,10 +29,10 @@ interface Category {
   notable: boolean;
 }
 
-const CATEGORIES: Category[] = [
+export const CATEGORIES: Category[] = [
   {
     id: 'attractions',
-    label: 'Things to do in',
+    label: 'Things to do',
     words:
       'things to (?:do|see)|attractions?|sightseeing|what to (?:see|do|visit)|places to (?:visit|see|go)|tourist (?:spots?|sites?|places|attractions?)|landmarks?|must[- ]sees?|points? of interest|sights|monuments?',
     // Two filters only: adding amenity=place_of_worship or building=* makes
@@ -44,19 +44,19 @@ const CATEGORIES: Category[] = [
     radiusKm: [2, 15],
     notable: true,
   },
-  { id: 'museums', label: 'Museums in', words: 'museums?|galler(?:y|ies)|exhibitions?', filters: ['["tourism"~"^(museum|gallery)$"]'], radiusKm: [2, 12], notable: true },
+  { id: 'museums', label: 'Museums', words: 'museums?|galler(?:y|ies)|exhibitions?', filters: ['["tourism"~"^(museum|gallery)$"]'], radiusKm: [2, 12], notable: true },
   {
     id: 'restaurants',
-    label: 'Restaurants in',
+    label: 'Restaurants',
     words: 'restaurants?|places to eat|where to eat|eateries|dinner|lunch|brunch',
     filters: ['["amenity"="restaurant"]'],
     radiusKm: [1, 4],
     notable: false,
   },
-  { id: 'cafes', label: 'Cafés in', words: 'caf[eé]s?|coffee(?: shops?)?', filters: ['["amenity"="cafe"]'], radiusKm: [1, 4], notable: false },
+  { id: 'cafes', label: 'Cafés', words: 'caf[eé]s?|coffee(?: shops?)?', filters: ['["amenity"="cafe"]'], radiusKm: [1, 4], notable: false },
   {
     id: 'bars',
-    label: 'Bars in',
+    label: 'Bars',
     words: 'bars?|pubs?|nightlife|brewer(?:y|ies)|cocktails?|wine bars?',
     filters: ['["amenity"~"^(bar|pub|biergarten)$"]', '["craft"="brewery"]'],
     radiusKm: [1, 4],
@@ -64,7 +64,7 @@ const CATEGORIES: Category[] = [
   },
   {
     id: 'hotels',
-    label: 'Hotels in',
+    label: 'Hotels',
     words: 'hotels?|hostels?|where to stay|places to stay|accommodation|lodging|resorts?',
     filters: ['["tourism"~"^(hotel|hostel|guest_house|resort)$"]'],
     radiusKm: [1, 5],
@@ -72,62 +72,105 @@ const CATEGORIES: Category[] = [
   },
   {
     id: 'parks',
-    label: 'Parks in',
-    words: 'parks?|gardens?|hik(?:es?|ing)|trails?|nature',
+    label: 'Parks',
+    words: 'parks?|gardens?|hik(?:es?|ing)|trails?',
     filters: ['["leisure"~"^(park|garden|nature_reserve)$"]', '["boundary"="national_park"]'],
     radiusKm: [2, 15],
     notable: true,
   },
-  { id: 'beaches', label: 'Beaches in', words: 'beach(?:es)?', filters: ['["natural"="beach"]'], radiusKm: [3, 25], notable: false },
+  { id: 'beaches', label: 'Beaches', words: 'beach(?:es)?', filters: ['["natural"="beach"]'], radiusKm: [3, 25], notable: false },
 ];
 
-const ADJ = String.raw`(?:(?:the|best|top|good|great|popular|famous|cheap|free|nice|cool|fun|kid[- ]friendly|family[- ]friendly|hidden|main|major|romantic|unusual|\d+)\s+)*`;
+/** Radius for a list around the user or of a kind Claude described (a business type): a neighbourhood, not a whole city. */
+const LOCAL_RADIUS_KM: [number, number] = [1.5, 5];
+
+const ADJ = String.raw`(?:(?:the|best|top|good|great|popular|famous|cheap|free|nice|cool|fun|kid[- ]friendly|family[- ]friendly|hidden|main|major|romantic|unusual|local|nearby|\d+)\s+)*`;
 const PLACE = String.raw`(?<place>\p{L}[\p{L}\s.'’-]{1,60}?)`;
 const CAT = `(?:${CATEGORIES.map((c) => `(?<${c.id}>${c.words})`).join('|')})`;
-const RE_CAT_IN = new RegExp(`^${ADJ}${CAT}\\s+(?:in|near|around|at)\\s+(?:the\\s+)?${PLACE}$`, 'iu');
+const RE_CAT_IN = new RegExp(`^${ADJ}${CAT}\\s+(?:in|near|around|at|close to)\\s+(?:the\\s+)?${PLACE}$`, 'iu');
 const RE_PLACE_CAT = new RegExp(`^${PLACE}\\s+${ADJ}${CAT}$`, 'iu');
+const RE_CAT_ONLY = new RegExp(`^${ADJ}${CAT}(?:\\s+nearby)?$`, 'iu');
 const RE_MAP = new RegExp(String.raw`^(?:(?:map|maps|location) of|where is|directions to|how to get to)\s+${PLACE}$|^${PLACE}\s+(?:map|maps|location)$`, 'iu');
-const NOT_A_PLACE = /^(?:me|here|us|there|my area|the area|this area|town|the city|my city|city|home|general|case of fire)$/i;
+/** "near me" and friends: the list is wanted around the user, not in a named place */
+const HERE = /^(?:me|here|us|my area|the area|this area|my location|nearby|my city|town|the city|home)$/i;
+const NOT_A_PLACE = /^(?:there|general|case of fire|the world|earth)$/i;
 
 export interface PlaceIntent {
-  kind: 'attractions' | 'place';
-  category?: CategoryId;
+  /** place: one named place, shown as a panel. list: places of a kind, shown as a map with a row of cards */
+  kind: 'place' | 'list';
+  /** what to geocode: the place itself, or the area a list is wanted in; '' means around the user */
   place: string;
-  /** Claude's idea of what the place is: city, landmark, business, ... */
+  /** list heading noun: "Things to do", "Pizza places", "Dog parks" */
+  label?: string;
+  /** list: Overpass tag filters, OR-ed; each a chain like ["amenity"="restaurant"]["cuisine"~"pizza"] */
+  filters?: string[];
+  /** list: the built-in category, when it is one */
+  category?: CategoryId;
+  /** Claude's idea of what a single place is: city, landmark, business, ... */
   placeKind?: string;
   /** pattern: matched by the regular expressions here; claude: places-classify.ts */
   source?: 'pattern' | 'claude';
 }
 
 /**
- * Does this query ask for a place or for things around one? Cheap enough to
- * run on every search: no network, just two regular expressions.
+ * Does this query ask for a place, or for places of a kind? Cheap enough
+ * to run on every search: no network, a few regular expressions.
  */
 export function placeIntent(q: string): PlaceIntent | null {
   const s = q.trim().replace(/[?!.]+$/, '').replace(/\s+/g, ' ');
   if (s.length < 4 || s.length > 100) return null;
-  const m = RE_CAT_IN.exec(s) ?? RE_PLACE_CAT.exec(s);
+  const list = (m: RegExpExecArray, place: string): PlaceIntent | null => {
+    const cat = CATEGORIES.find((c) => m.groups?.[c.id]);
+    return cat ? { kind: 'list', place, label: cat.label, filters: cat.filters, category: cat.id, source: 'pattern' } : null;
+  };
+  let m = RE_CAT_IN.exec(s) ?? RE_PLACE_CAT.exec(s);
   if (m?.groups) {
     const place = cleanPlace(m.groups.place);
-    if (!place) return null;
-    const category = CATEGORIES.find((c) => m.groups?.[c.id])?.id;
-    if (!category) return null;
-    return { kind: 'attractions', category, place, source: 'pattern' };
+    return place === null ? null : list(m, place);
   }
+  m = RE_CAT_ONLY.exec(s);
+  if (m?.groups) return list(m, '');
   const mm = RE_MAP.exec(s);
   if (mm?.groups) {
     const place = cleanPlace(mm.groups.place);
-    if (!place) return null;
-    return { kind: 'place', place, source: 'pattern' };
+    return place ? { kind: 'place', place, source: 'pattern' } : null;
   }
   return null;
 }
 
+/** The place name, '' for "near me" and the like, null when it is not a place at all. */
 function cleanPlace(raw: string | undefined): string | null {
   const place = (raw ?? '').trim().replace(/\s+/g, ' ');
   if (!place || NOT_A_PLACE.test(place)) return null;
+  if (HERE.test(place)) return '';
   if (place.split(' ').length > 5) return null;
   return place;
+}
+
+// ------------------------------------------------------- Overpass filters ----
+// Claude writes tag filters for kinds of place the built-in table lacks
+// ("dog parks", "sushi", "urgent care"). Only this grammar reaches Overpass:
+// a chain of ["key"="value"] or ["key"~"regex"] clauses on known keys.
+
+const FILTER_KEYS = new Set([
+  'amenity', 'shop', 'tourism', 'leisure', 'cuisine', 'craft', 'healthcare', 'healthcare:speciality', 'natural', 'historic', 'sport',
+  'office', 'building', 'aeroway', 'railway', 'public_transport', 'emergency', 'man_made', 'landuse', 'boundary', 'diet:vegan',
+  'diet:vegetarian', 'dog', 'brand', 'name', 'club', 'religion', 'vending', 'fuel', 'social_facility', 'highway', 'attraction', 'water',
+]);
+const CLAUSE = /^\["([a-z_:]+)"(=|~)"([A-Za-z0-9_|^$()?:;,.'’& \-]{1,80})"\]/;
+
+/** The filter if every clause is well-formed and on a known key, else null. */
+export function validFilter(f: unknown): string | null {
+  if (typeof f !== 'string') return null;
+  let rest = f.trim();
+  let n = 0;
+  while (rest.length) {
+    const m = CLAUSE.exec(rest);
+    if (!m || !FILTER_KEYS.has(m[1])) return null;
+    rest = rest.slice(m[0].length);
+    if (++n > 3) return null;
+  }
+  return n ? f.trim() : null;
 }
 
 // ---------------------------------------------------------------- data ----
@@ -143,7 +186,7 @@ export interface Place extends Geo {
   name: string;
   /** "Lisboa, Portugal" */
   displayName: string;
-  /** Nominatim's addresstype: city, town, country, ... */
+  /** Nominatim's addresstype: city, town, country, ...; "user" for the user's own position */
   type: string;
   /** Nominatim's category/type, e.g. "amenity restaurant", for the panel's subtitle */
   kindLabel?: string;
@@ -180,15 +223,31 @@ export interface Attraction {
   cuisine?: string;
   openingHours?: string;
   address?: string;
+  phone?: string;
+  /** km from the user, when the list is around them */
+  distanceKm?: number;
+}
+
+export interface UserLocation {
+  lat: number;
+  lon: number;
+  /** "Denver, Colorado" when it is the saved home location; '' for the browser's position */
+  label?: string;
 }
 
 export interface PlacesData {
-  kind: 'attractions' | 'place';
+  kind: 'place' | 'list';
   category?: CategoryId;
+  /** "Things to do in Lisbon", "Pizza places near you" */
   heading: string;
+  /** the named place, or a stand-in for the user's position */
   place: Place;
   items: Attraction[];
-  /** the attractions list could not be fetched (Overpass down or out of time) */
+  /** the list is around the user's location */
+  nearUser?: boolean;
+  /** a list was wanted around the user, but no location is known */
+  needsLocation?: boolean;
+  /** the list could not be fetched (Overpass down or out of time) */
   failed?: boolean;
 }
 
@@ -200,16 +259,19 @@ const FAILED_CACHE_MS = 60_000;
 const cache = new Map<string, { at: number; value: Promise<PlacesData | null> }>();
 
 /** The card's data for an intent, or null when the place cannot be found. Memoised for a day. */
-export function buildPlaces(intent: PlaceIntent, opts: { fresh?: boolean } = {}): Promise<PlacesData | null> {
-  const key = `${intent.kind}:${intent.category ?? ''}:${intent.place.toLowerCase()}`;
+export function buildPlaces(intent: PlaceIntent, opts: { fresh?: boolean; user?: UserLocation | null } = {}): Promise<PlacesData | null> {
+  const user = intent.kind === 'list' && !intent.place ? (opts.user ?? null) : null;
+  // A list around the user is keyed on a ~100 m grid, so the same block gets the memo.
+  const where = user ? `${user.lat.toFixed(3)},${user.lon.toFixed(3)}` : intent.place.toLowerCase();
+  const key = `${intent.kind}:${intent.category ?? (intent.filters ?? []).join('|')}:${where}`;
   const hit = cache.get(key);
   const now = Date.now();
   if (hit && !opts.fresh && now - hit.at < CACHE_MS) return hit.value;
-  const value = resolve(intent);
+  const value = resolve(intent, user);
   cache.set(key, { at: now, value });
   value.then(
     (d) => {
-      if (d?.failed) cache.set(key, { at: now - CACHE_MS + FAILED_CACHE_MS, value });
+      if (d?.failed || d?.needsLocation) cache.set(key, { at: now - CACHE_MS + FAILED_CACHE_MS, value });
     },
     () => cache.delete(key),
   );
@@ -219,13 +281,13 @@ export function buildPlaces(intent: PlaceIntent, opts: { fresh?: boolean } = {})
   return value;
 }
 
-async function resolve(intent: PlaceIntent): Promise<PlacesData | null> {
-  // The pattern path has only a regular expression's word for it that the
-  // text is a place, so Nominatim's answer must be place-shaped; Claude has
-  // already said what the query is about, so any hit for its name will do.
-  const place = await geocode(intent.place, { strict: intent.source !== 'claude' });
-  if (!place) return null;
+async function resolve(intent: PlaceIntent, user: UserLocation | null): Promise<PlacesData | null> {
   if (intent.kind === 'place') {
+    // The pattern path has only a regular expression's word for it that the
+    // text is a place, so Nominatim's answer must be place-shaped; Claude has
+    // already said what the query is about, so any hit for its name will do.
+    const place = await geocode(intent.place, { strict: intent.source !== 'claude' });
+    if (!place) return null;
     try {
       await enrichPlace(place);
     } catch (err) {
@@ -233,15 +295,35 @@ async function resolve(intent: PlaceIntent): Promise<PlacesData | null> {
     }
     return { kind: 'place', heading: place.name, place, items: [] };
   }
-  const category = CATEGORIES.find((c) => c.id === intent.category)!;
-  const heading = `${category.label} ${place.name}`;
+
+  const label = intent.label || 'Places';
+  let place: Place;
+  if (intent.place) {
+    const found = await geocode(intent.place, { strict: intent.source !== 'claude' });
+    if (!found) return null;
+    place = found;
+  } else if (user) {
+    place = { name: user.label || 'you', displayName: user.label || 'your location', type: 'user', lat: user.lat, lon: user.lon };
+  } else {
+    const stub: Place = { name: 'you', displayName: '', type: 'user', lat: 0, lon: 0 };
+    return { kind: 'list', category: intent.category, heading: `${label} near you`, place: stub, items: [], nearUser: true, needsLocation: true };
+  }
+  const heading = intent.place ? `${label} in ${place.name}` : `${label} near ${user?.label ? place.name : 'you'}`;
+  const cat = CATEGORIES.find((c) => c.id === intent.category);
+  const filters = (intent.filters?.length ? intent.filters : (cat?.filters ?? [])).map(validFilter).filter((f): f is string => !!f);
+  if (!filters.length) return null;
   let items: Attraction[] = [];
   let failed = false;
   try {
-    items = await attractions(place, category);
+    items = await listPlaces(place, {
+      filters,
+      radiusKm: !intent.place || !cat ? LOCAL_RADIUS_KM : cat.radiusKm,
+      notable: !!cat?.notable && !!intent.place,
+      from: user ?? undefined,
+    });
   } catch (err) {
     failed = true;
-    console.error('[places] overpass', intent.place, (err as Error).message);
+    console.error('[places] overpass', intent.place || 'near user', (err as Error).message);
   }
   if (items.length) {
     try {
@@ -250,7 +332,7 @@ async function resolve(intent: PlaceIntent): Promise<PlacesData | null> {
       console.error('[places] wikidata', intent.place, (err as Error).message);
     }
   }
-  return { kind: 'attractions', category: category.id, heading, place, items, failed };
+  return { kind: 'list', category: intent.category, heading, place, items, nearUser: !intent.place, failed };
 }
 
 // Only these Nominatim address types are places one asks for things "in":
@@ -275,6 +357,8 @@ interface NominatimHit {
   osm_id?: number;
   boundingbox?: [string, string, string, string];
   extratags?: Record<string, string>;
+  address?: Record<string, string>;
+  error?: string;
 }
 
 export async function geocode(name: string, opts: { strict?: boolean } = {}): Promise<Place | null> {
@@ -286,14 +370,37 @@ export async function geocode(name: string, opts: { strict?: boolean } = {}): Pr
   if (!res.ok) throw new Error(`Nominatim responded ${res.status}`);
   const hits = (await res.json()) as NominatimHit[];
   const typeOf = (x: NominatimHit) => x.addresstype ?? x.category ?? '';
-  const h = (opts.strict === false ? hits.find((x) => PLACE_TYPES.has(typeOf(x))) ?? hits[0] : hits.find((x) => PLACE_TYPES.has(typeOf(x)))) ?? null;
+  const h = (opts.strict === false ? (hits.find((x) => PLACE_TYPES.has(typeOf(x))) ?? hits[0]) : hits.find((x) => PLACE_TYPES.has(typeOf(x)))) ?? null;
   if (!h) return null;
-  const type = typeOf(h);
+  return toPlace(h, name);
+}
+
+/** The locality at a coordinate ("Denver, Colorado"): the name of a saved home location. */
+export async function reverseGeocode(lat: number, lon: number): Promise<Place | null> {
+  const params = new URLSearchParams({ lat: String(lat), lon: String(lon), format: 'jsonv2', zoom: '14', addressdetails: '1', 'accept-language': 'en' });
+  const res = await fetch(`${config.nominatimUrl}/reverse?${params}`, {
+    headers: { 'User-Agent': UA, Accept: 'application/json' },
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!res.ok) throw new Error(`Nominatim responded ${res.status}`);
+  const h = (await res.json()) as NominatimHit;
+  if (!h || h.error || !h.lat) return null;
+  const a = h.address ?? {};
+  const locality = a.city || a.town || a.village || a.municipality || a.county || h.name || '';
+  const region = a.state || a.country || '';
+  const p = toPlace(h, locality);
+  p.name = locality || p.name;
+  p.displayName = [locality, region].filter(Boolean).join(', ') || p.displayName;
+  return p;
+}
+
+function toPlace(h: NominatimHit, fallbackName: string): Place {
+  const type = h.addresstype ?? h.category ?? '';
   const bb = h.boundingbox?.map(Number) as [number, number, number, number] | undefined;
   const t = h.extratags ?? {};
   return {
-    name: h.name || h.display_name?.split(',')[0] || name,
-    displayName: h.display_name ?? name,
+    name: h.name || h.display_name?.split(',')[0] || fallbackName,
+    displayName: h.display_name ?? fallbackName,
     type,
     kindLabel: [h.category, h.type].filter((x) => x && x !== 'yes').join(' ').replace(/_/g, ' ') || undefined,
     lat: Number(h.lat),
@@ -353,13 +460,13 @@ export function bboxKm(bbox: [number, number, number, number]): number {
   return Math.max((n - s) * 111, (e - w) * 111 * Math.cos(midLat));
 }
 
-interface OverpassElement {
-  type: string;
-  id: number;
-  lat?: number;
-  lon?: number;
-  center?: { lat: number; lon: number };
-  tags?: Record<string, string>;
+/** Great-circle distance in km. */
+export function distanceKm(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+  const r = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * r;
+  const dLon = (b.lon - a.lon) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h));
 }
 
 /** A box of ±km around a point, as Overpass wants it: south,west,north,east. */
@@ -369,22 +476,34 @@ export function boxAround(lat: number, lon: number, km: number): string {
   return [lat - dLat, lon - dLon, lat + dLat, lon + dLon].map((v) => v.toFixed(4)).join(',');
 }
 
-async function attractions(place: Place, category: Category): Promise<Attraction[]> {
+interface OverpassElement {
+  type: string;
+  id: number;
+  lat?: number;
+  lon?: number;
+  center?: { lat: number; lon: number };
+  tags?: Record<string, string>;
+}
+
+async function listPlaces(
+  place: Place,
+  opts: { filters: string[]; radiusKm: [number, number]; notable: boolean; from?: { lat: number; lon: number } },
+): Promise<Attraction[]> {
   // Search box from the place's size: a village gets the floor, a city the
   // ceiling; a whole country still gets the ceiling, around its centre. A
   // bounding box, not "around": Overpass answers a box in a third of the time.
   const size = place.bbox ? bboxKm(place.bbox) : 0;
-  const km = Math.min(category.radiusKm[1], Math.max(category.radiusKm[0], size / 2));
+  const km = Math.min(opts.radiusKm[1], Math.max(opts.radiusKm[0], size / 2));
   const box = `(${boxAround(place.lat, place.lon, km)})`;
   const query = (extra: string, limit: number) =>
-    `[out:json][timeout:12];(${category.filters.map((f) => `nwr${f}["name"]${extra}${box};`).join('')});out center tags ${limit};`;
+    `[out:json][timeout:12];(${opts.filters.map((f) => `nwr${f}["name"]${extra}${box};`).join('')});out center tags ${limit};`;
 
   // Landmarks: ask for Wikidata-linked features first (a city has hundreds
   // of named tourism nodes; the linked ones are the ones worth a visit) and
   // widen to everything named only when that is thin, as in a small town.
-  let elements = await overpass(query(category.notable ? '["wikidata"]' : '', 150));
-  if (category.notable && elements.length < 4) elements = elements.concat(await overpass(query('', 60)));
-  return rankAttractions(elements);
+  let elements = await overpass(query(opts.notable ? '["wikidata"]' : '', 150));
+  if (opts.notable && elements.length < 4) elements = elements.concat(await overpass(query('', 60)));
+  return rankAttractions(elements, opts.from);
 }
 
 async function overpass(data: string): Promise<OverpassElement[]> {
@@ -419,10 +538,12 @@ async function overpass(data: string): Promise<OverpassElement[]> {
 /**
  * Order Overpass's arbitrary-order features the way a visitor would want
  * them: things with a Wikidata item and a Wikipedia article first, then the
- * well-described, then the rest. Duplicates (a node and the building it sits
- * in) collapse by Wikidata id or name.
+ * well-described, then the rest. Around the user, nearer is better: each km
+ * costs a point, so a complete record two blocks away beats a bare name
+ * across town. Duplicates (a node and the building it sits in) collapse by
+ * Wikidata id or name.
  */
-export function rankAttractions(elements: OverpassElement[]): Attraction[] {
+export function rankAttractions(elements: OverpassElement[], from?: { lat: number; lon: number }): Attraction[] {
   const seen = new Set<string>();
   const scored: { a: Attraction; score: number }[] = [];
   for (const el of elements) {
@@ -434,7 +555,8 @@ export function rankAttractions(elements: OverpassElement[]): Attraction[] {
     const key = t.wikidata || name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
     if (seen.has(key)) continue;
     seen.add(key);
-    const kind = t.tourism || t.historic || t.amenity || t.leisure || t.natural || t.craft || t.building || t.boundary || '';
+    const kind = t.tourism || t.historic || t.amenity || t.leisure || t.natural || t.craft || t.shop || t.healthcare || t.building || t.boundary || t.office || '';
+    const dist = from ? distanceKm(from, { lat, lon }) : undefined;
     const score =
       (t.wikidata ? 4 : 0) +
       (t.wikipedia ? 2 : 0) +
@@ -442,10 +564,12 @@ export function rankAttractions(elements: OverpassElement[]): Attraction[] {
       (t.website || t['contact:website'] ? 1 : 0) +
       (t.description ? 0.5 : 0) +
       (t.opening_hours ? 0.5 : 0) +
+      (t.phone || t['contact:phone'] ? 0.5 : 0) +
       (t.image || t.wikimedia_commons ? 0.5 : 0) +
-      (kind === 'place_of_worship' ? -1 : 0);
+      (kind === 'place_of_worship' ? -1 : 0) -
+      (dist ?? 0);
     const street = t['addr:street'];
-    const address = street ? `${street}${t['addr:housenumber'] ? ' ' + t['addr:housenumber'] : ''}` : undefined;
+    const address = street ? `${t['addr:housenumber'] ? t['addr:housenumber'] + ' ' : ''}${street}` : undefined;
     scored.push({
       a: {
         name,
@@ -461,6 +585,8 @@ export function rankAttractions(elements: OverpassElement[]): Attraction[] {
         cuisine: t.cuisine?.replace(/_/g, ' ').replace(/;/g, ', '),
         openingHours: t.opening_hours,
         address,
+        phone: t.phone || t['contact:phone'],
+        distanceKm: dist,
       },
       score,
     });
@@ -629,8 +755,9 @@ export function osmUrl(lat: number, lon: number, zoom: number): string {
 export function googleMapsUrl(lat: number, lon: number): string {
   return `https://www.google.com/maps/search/?api=1&query=${lat.toFixed(5)}%2C${lon.toFixed(5)}`;
 }
-export function directionsUrl(lat: number, lon: number): string {
-  return `https://www.google.com/maps/dir/?api=1&destination=${lat.toFixed(5)},${lon.toFixed(5)}`;
+export function directionsUrl(lat: number, lon: number, from?: { lat: number; lon: number } | null): string {
+  const origin = from ? `&origin=${from.lat.toFixed(5)}%2C${from.lon.toFixed(5)}` : '';
+  return `https://www.google.com/maps/dir/?api=1${origin}&destination=${lat.toFixed(5)}%2C${lon.toFixed(5)}`;
 }
 export function osmFeatureUrl(type: string, id: number): string {
   return `https://www.openstreetmap.org/${type}/${id}`;

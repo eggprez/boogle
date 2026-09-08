@@ -345,6 +345,8 @@ export function settingsPage(opts: {
   settings: Settings;
   saved?: boolean;
   cleared?: number;
+  /** the home location typed last time could not be geocoded */
+  homeNotFound?: boolean;
   health: { searxng: boolean; claude: string | null; cacheEntries: number; cacheBytes: number; reddit?: RedditHealth | null };
   user: string;
 }): string {
@@ -417,6 +419,28 @@ export function settingsPage(opts: {
         <input type="checkbox" name="openInNewTab"${chk(s.openInNewTab)}>
         <span><strong>Open results in a new tab</strong></span>
       </label>
+    </section>
+
+    <section id="location">
+      <h2>${icons.pin} Location</h2>
+      <p class="section-note">Used for “near me” searches (“pizza”, “dog parks”) and for distances. This browser's own location comes first when it can share one (browsers only do that over HTTPS or on localhost); the home location below is the fallback.</p>
+      <div class="row">
+        <span class="row-label"><strong>This device</strong><small id="geo-status">Checking…</small></span>
+        <span class="geo-actions"><button type="button" class="btn" id="geo-btn">Use this device's location</button> <button type="button" class="btn" id="geo-forget" hidden>Forget</button></span>
+      </div>
+      <div class="row">
+        <span class="row-label"><strong>Home location</strong><small>A city, an address, or “lat, lon”. ${
+          s.homeLat !== null ? `<span class="ok-dot"></span> ${e(s.homeLabel || s.home)}` : s.home ? `<span class="${opts.homeNotFound ? 'bad' : 'warn'}-dot"></span> not found` : 'Not set.'
+        }</small></span>
+        <input type="text" name="home" value="${e(s.home)}" placeholder="Denver, CO" maxlength="120" autocomplete="off">
+      </div>
+      <div class="row">
+        <span class="row-label"><strong>Distances</strong></span>
+        <select name="units">
+          <option value="km"${sel(s.units, 'km')}>Kilometres</option>
+          <option value="mi"${sel(s.units, 'mi')}>Miles</option>
+        </select>
+      </div>
     </section>
 
     <section>

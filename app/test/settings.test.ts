@@ -30,4 +30,10 @@ describe('sanitize', () => {
     expect(sanitize({ language: 'en;rm -rf' }).language).toBe('auto');
     expect(sanitize({ language: 'x'.repeat(40) }).language).toBe('auto');
   });
+  it('keeps a home location and its coordinates, and rejects bad ones', () => {
+    const s = sanitize({ home: ' Denver, CO ', homeLat: 39.74, homeLon: -104.99, homeLabel: 'Denver, Colorado', units: 'mi' });
+    expect(s).toMatchObject({ home: 'Denver, CO', homeLat: 39.74, homeLon: -104.99, homeLabel: 'Denver, Colorado', units: 'mi' });
+    expect(sanitize({ homeLat: 95, homeLon: 0 }).homeLat).toBeNull();
+    expect(sanitize({ units: 'furlongs' }).units).toBe('km');
+  });
 });

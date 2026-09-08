@@ -14,11 +14,18 @@ stdin.on('end', async () => {
   // `--output-format json` is the one-shot path (overview/ask.ts): today the
   // place classifier. Well-known cities and landmarks are places, the rest not.
   if (argv[argv.indexOf('--output-format') + 1] === 'json') {
-    const query = input.match(/Query: "(.*)"/)?.[1] ?? '';
-    const isPlace = /^(lisbon|paris|denver|eiffel tower|kyoto)$/i.test(query.trim());
-    const result = isPlace
-      ? JSON.stringify({ place: true, name: query.replace(/\b\w/g, (c) => c.toUpperCase()), kind: /tower/i.test(query) ? 'landmark' : 'city', category: null, area: '' })
-      : JSON.stringify({ place: false, name: '', kind: 'other', category: null, area: '' });
+    const query = (input.match(/Query: "(.*)"/)?.[1] ?? '').trim();
+    const no = { place: false, mode: 'one', name: '', kind: 'other', what: '', area: '', category: null, filters: [] };
+    const kinds = { pizza: ['Pizza places', '["amenity"="restaurant"]["cuisine"~"pizza"]'], coffee: ['Coffee shops', '["amenity"="cafe"]'], 'dog parks': ['Dog parks', '["leisure"="dog_park"]'] };
+    const kind = Object.keys(kinds).find((k) => new RegExp(`\\b${k}\\b`, 'i').test(query));
+    let result;
+    if (/^(lisbon|paris|denver|eiffel tower|kyoto)$/i.test(query)) {
+      result = { ...no, place: true, name: query.replace(/\b\w/g, (c) => c.toUpperCase()), kind: /tower/i.test(query) ? 'landmark' : 'city' };
+    } else if (kind) {
+      const area = query.match(/\b(?:in|around)\s+(.+)$/i)?.[1] ?? '';
+      result = { ...no, place: true, mode: 'list', kind: '', what: kinds[kind][0], area, filters: [kinds[kind][1]] };
+    } else result = no;
+    result = JSON.stringify(result);
     stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result, total_cost_usd: 0.0001, duration_ms: 50 }) + '\n');
     return;
   }

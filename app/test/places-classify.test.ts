@@ -20,33 +20,35 @@ describe('cheapReject', () => {
 });
 
 describe('parseClassification', () => {
-  it('maps a place verdict to a single-place intent', () => {
-    expect(parseClassification('{"place":true,"name":"Denver, Colorado","kind":"city","category":null,"area":""}')).toEqual({
+  it('maps a one-place verdict to a place intent', () => {
+    expect(parseClassification('{"place":true,"mode":"one","name":"Denver, Colorado","kind":"city","what":"","area":"","category":null,"filters":[]}')).toEqual({
       kind: 'place',
       place: 'Denver, Colorado',
       placeKind: 'city',
       source: 'claude',
     });
   });
-  it('maps a category verdict to an attractions intent around the area', () => {
-    expect(parseClassification('{"place":true,"name":"Austin, Texas","kind":"city","category":"restaurants","area":"Austin, Texas"}')).toEqual({
-      kind: 'attractions',
-      category: 'restaurants',
-      place: 'Austin, Texas',
+  it('maps a list verdict with custom filters, around the user when no area is given', () => {
+    expect(parseClassification('{"place":true,"mode":"list","name":"","kind":"","what":"Pizza places","area":"","category":null,"filters":["[\\"amenity\\"=\\"restaurant\\"][\\"cuisine\\"~\\"pizza\\"]"]}')).toEqual({
+      kind: 'list',
+      place: '',
+      label: 'Pizza places',
+      filters: ['["amenity"="restaurant"]["cuisine"~"pizza"]'],
+      category: undefined,
       source: 'claude',
     });
   });
-  it('tolerates prose around the JSON and unknown categories', () => {
-    expect(parseClassification('Sure: {"place":true,"name":"Kyoto","kind":"city","category":"temples","area":"Kyoto"} done')).toEqual({
-      kind: 'place',
-      place: 'Kyoto',
-      placeKind: 'city',
-      source: 'claude',
-    });
+  it('falls back to the built-in filters for a known category with bad filters', () => {
+    const r = parseClassification('{"place":true,"mode":"list","name":"","kind":"","what":"Restaurants","area":"Austin, Texas","category":"restaurants","filters":["drop table"]}');
+    expect(r).toMatchObject({ kind: 'list', place: 'Austin, Texas', category: 'restaurants', filters: ['["amenity"="restaurant"]'] });
   });
-  it('returns null for a no, an empty name, or junk', () => {
-    expect(parseClassification('{"place":false,"name":"","kind":"other","category":null,"area":""}')).toBeNull();
-    expect(parseClassification('{"place":true,"name":"","kind":"city","category":null,"area":""}')).toBeNull();
+  it('tolerates prose around the JSON', () => {
+    expect(parseClassification('Sure: {"place":true,"mode":"one","name":"Kyoto","kind":"city"} done')).toMatchObject({ kind: 'place', place: 'Kyoto' });
+  });
+  it('returns null for a no, an empty name, a list with no usable filter, or junk', () => {
+    expect(parseClassification('{"place":false,"mode":"one","name":"","kind":"other"}')).toBeNull();
+    expect(parseClassification('{"place":true,"mode":"one","name":"","kind":"city"}')).toBeNull();
+    expect(parseClassification('{"place":true,"mode":"list","what":"Things","area":"","category":null,"filters":["["x"="y"]"]}')).toBeNull();
     expect(parseClassification('I cannot help with that')).toBeNull();
     expect(parseClassification('{"place": "yes"}')).toBeNull();
   });

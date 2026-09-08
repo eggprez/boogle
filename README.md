@@ -27,12 +27,17 @@ minus Google's AI Overview and plus one written by Claude.
   alongside every web search; the strip appears only when at least three
   sites covered the query in the past week and the newest story is under two
   days old, so "python list comprehension" never gets one.
-- **Maps and places**, without a Google Maps key: a knowledge panel for a
-  place (a city, a landmark) gets a map, and a query like *things to do in
-  Lisbon*, *museums in Tokyo* or *map of Berlin* gets a card with a pinned
-  map and a row of attractions with photos and Wikipedia links. Built from
-  OpenStreetMap's Nominatim, Overpass and tile servers plus one Wikidata
-  query, all keyless; the map is a mosaic of plain tiles, no map library.
+- **Maps and places**, without a Google Maps key: a place (*denver*, *golden
+  gate bridge*, a business) gets a knowledge panel with a photo, a map,
+  address, hours and directions; a kind of place (*things to do in Lisbon*,
+  *sushi in Austin*, *pizza*, *dog parks near me*) gets a card with a pinned
+  map and a row of results with photos, distances and Wikipedia links, around
+  the named area or around you. Claude decides which queries are about
+  places and writes the OpenStreetMap tag filters for whatever kind was
+  asked; the data comes from OpenStreetMap's Nominatim, Overpass and tile
+  servers plus Wikidata and Wikipedia, all keyless; the map is a mosaic of
+  plain tiles, no map library. Your position comes from the browser when it
+  will share one, else from a home location in Settings.
 - **Time filter** (past day / week / month / year) on every tab, real
   **favicons** on result cards (proxied and cached, never fetched by your
   browser), page **thumbnails** on web results when an engine supplies one,
@@ -236,7 +241,8 @@ secret only NGINX knows.
 
 `/settings` (the gear icon) has: overview on/off, source (Claude's knowledge,
 snippets, or read the pages), model, safe search, language, top stories on/off,
-maps and places on/off, open-in-new-tab, theme, a status panel,
+maps and places on/off, location (this device's position, a home location as
+the fallback, km or miles), open-in-new-tab, theme, a status panel,
 a cache-clear button, the keyboard shortcuts, and the bang list. Settings are stored per user under
 `/data/settings/` in the `boogle-data` volume.
 
@@ -293,20 +299,40 @@ burst does not affect the web engines.
 
 **Places.** Two questions have to be answered: is this query about a place,
 and what is there. The first is answered in two stages. `places.ts` matches
-the obvious shapes with regular expressions, no network: *category in place*
+the obvious shapes with regular expressions, no network: *kind in place*
 (things to do / attractions / museums / restaurants / cafés / bars / hotels /
-parks / beaches, in or near somewhere; also "Lisbon attractions") and *map of
-/ where is / X map*. Everything else that could plausibly be a place (up to
-eight words, no code or URL fragments, not a plain how-to question) goes to
+parks / beaches, in or near somewhere; also "Lisbon attractions"), the same
+kinds on their own or "near me" (a list around you), and *map of / where is /
+X map*. Everything else that could plausibly be a place (up to eight words,
+no code or URL fragments, not a plain how-to question) goes to
 `places-classify.ts`, which asks Claude Haiku through the same CLI as the
-overview: one short completion, no tools, a JSON verdict with the place's
-name written for a geocoder ("Denver, Colorado", "Eiffel Tower, Paris"), its
-kind, and a category when the query asks for venues around a place in words
-the patterns miss ("fun stuff for kids around denver"). Claude knows that
-"paris hilton", "boston dynamics", "history of rome" and "mercury" are not
-places and that "phoenix" and "yosemite" are. The verdict is cached on disk
-with the overviews, so a query costs at most one small Claude call ever, and
-a CLI failure just means no card.
+overview: one short completion, no tools, a JSON verdict. For one place it
+gives the name written for a geocoder ("Denver, Colorado", "Eiffel Tower,
+Paris", "Joe's Pizza, Denver") and its kind. For a kind of place it gives a
+heading ("Pizza places", "Urgent care", "Hardware stores"), the area if the
+query named one, and one to three OpenStreetMap tag filters for that kind,
+which pass a strict grammar (known keys, `["key"="value"]` or
+`["key"~"regex"]` clauses only) before they reach Overpass; a built-in
+category's filters are used when the kind is one of the eight. Claude knows
+that "paris hilton", "boston dynamics", "history of rome", "pizza dough
+recipe" and "mercury" are not places and that "phoenix", "yosemite" and a
+bare "sushi" are. The verdict is cached on disk with the overviews, so a
+query costs at most one small Claude call ever, and a CLI failure just means
+no card.
+
+**Where you are.** A list with no named area is built around the user. The
+browser's position is used first: the results page asks for it once (on
+HTTPS or localhost, which is the browser's rule, and only while the setting
+is on), keeps a fix for twenty minutes in that browser only, and remembers a
+refusal so it does not ask again. If no position comes within four seconds
+(Chrome does not start its own timeout while its permission prompt is open)
+the request goes ahead with the fallback: the home location from Settings,
+geocoded once when it is saved (a city, an address, or a "lat, lon" pair).
+With neither, the card says how to set one. Around the user the search box
+is 1.5 to 5 km, results are ranked with a one-point-per-km penalty on top of
+the completeness score, each card shows its distance (km or miles, a
+setting), the map marks your position, and a place's directions link starts
+from it.
 
 The results page asks `/api/places` from `app.js` after it has loaded, so
 neither Claude nor the map services ever hold the results up. A single place

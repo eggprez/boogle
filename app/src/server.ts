@@ -11,7 +11,7 @@ import { getFavicon, validHost } from './favicons.js';
 import { generateFollowup, generateOverview, type OverviewEvent } from './overview/index.js';
 import { claudeVersion, type FollowupTurn } from './overview/claude.js';
 import { topStories } from './news.js';
-import { buildPlaces, placeIntent } from './places.js';
+import { buildPlaces, geocode, placeIntent, reverseGeocode, type UserLocation } from './places.js';
 import { classifyPlace } from './places-classify.js';
 import { redditHealth } from './reddit.js';
 import { autocomplete, parseTimeRange, ping, search, TABS, type SearxResponse, type SearxResult, type Tab } from './searxng.js';
@@ -95,7 +95,7 @@ app.get('/search', async (c) => {
   // classifier decides there); a query the patterns already recognise as a
   // list of places gets its skeleton drawn in the page straight away.
   const placesOn = first && config.places && settings.places && !error;
-  const placesPending = placesOn && placeIntent(q)?.kind === 'attractions';
+  const placesPending = placesOn && placeIntent(q)?.kind === 'list';
   return c.html(resultsPage({ q, tab, page, timeRange, data, error, settings, overviewMode, stories, placesOn, placesPending }));
 });
 
@@ -109,12 +109,23 @@ app.get('/api/places', async (c) => {
   if (!q || !config.places) return c.body(null, 204);
   const settings = await loadSettings(c.get('user'));
   if (!settings.places) return c.body(null, 204);
+  // Where the user is: the browser's position when the page could get one,
+  // else the home location from Settings, else nothing (a list "near me"
+  // then asks for one).
+  const lat = Number(c.req.query('lat'));
+  const lon = Number(c.req.query('lon'));
+  const user: UserLocation | null =
+    c.req.query('lat') && Math.abs(lat) <= 90 && Math.abs(lon) <= 180
+      ? { lat, lon, label: '' }
+      : settings.homeLat !== null && settings.homeLon !== null
+        ? { lat: settings.homeLat, lon: settings.homeLon, label: settings.homeLabel || settings.home }
+        : null;
   let data;
   try {
     const intent = await classifyPlace(q);
     if (!intent) return c.body(null, 204);
     if (intent.kind === 'place' && c.req.query('infobox') === '1') return c.body(null, 204);
-    data = await buildPlaces(intent, { fresh: c.req.query('retry') === '1' });
+    data = await buildPlaces(intent, { fresh: c.req.query('retry') === '1', user });
   } catch (err) {
     console.error('[places]', q, (err as Error).message);
     return c.body(null, 204);
@@ -123,7 +134,7 @@ app.get('/api/places', async (c) => {
   const target = settings.openInNewTab ? ' target="_blank" rel="noopener"' : ' rel="noopener"';
   // The server memoises the data for a day; the browser must not also keep
   // a copy, or an Overpass hiccup's empty card would stick for the cache's life.
-  return c.html(placesCard(data, target, q), 200, { 'Cache-Control': 'no-store' });
+  return c.html(placesCard(data, { target, q, units: settings.units, from: user }), 200, { 'Cache-Control': 'no-store' });
 });
 
 app.get('/suggest', async (c) => {
@@ -230,6 +241,7 @@ app.get('/settings', async (c) => {
       settings,
       user,
       saved: c.req.query('saved') === '1',
+      homeNotFound: c.req.query('home') === 'notfound',
       cleared: cleared === undefined ? undefined : Number(cleared),
       health: { searxng, claude, cacheEntries: cache.entries, cacheBytes: cache.bytes, reddit },
     }),
@@ -238,7 +250,13 @@ app.get('/settings', async (c) => {
 
 app.post('/settings', async (c) => {
   const form = await c.req.parseBody();
+  const before = await loadSettings(c.get('user'));
   const s = sanitize({
+    home: form.home,
+    homeLat: before.homeLat,
+    homeLon: before.homeLon,
+    homeLabel: before.homeLabel,
+    units: form.units,
     overviewEnabled: form.overviewEnabled ?? 'off',
     openInNewTab: form.openInNewTab ?? 'off',
     topStories: form.topStories ?? 'off',
@@ -249,8 +267,38 @@ app.post('/settings', async (c) => {
     safesearch: form.safesearch,
     language: form.language,
   });
+  // The home location is geocoded once, when it changes: a "lat, lon" pair
+  // is taken as is and named by reverse geocoding; anything else goes to
+  // Nominatim. A location that cannot be found is kept as text and flagged.
+  let homeNote = '';
+  if (s.home !== before.home || (s.home && s.homeLat === null)) {
+    s.homeLat = s.homeLon = null;
+    s.homeLabel = '';
+    if (s.home) {
+      try {
+        const pair = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/.exec(s.home);
+        if (pair && Math.abs(Number(pair[1])) <= 90 && Math.abs(Number(pair[2])) <= 180) {
+          s.homeLat = Number(pair[1]);
+          s.homeLon = Number(pair[2]);
+          s.homeLabel = (await reverseGeocode(s.homeLat, s.homeLon).catch(() => null))?.displayName ?? '';
+        } else {
+          const p = await geocode(s.home, { strict: false });
+          if (p) {
+            s.homeLat = p.lat;
+            s.homeLon = p.lon;
+            // "Denver, Colorado": the locality and its region, not the whole address line
+            const parts = p.displayName.split(',').map((x) => x.trim()).filter(Boolean);
+            s.homeLabel = [parts[0], parts.length > 2 ? parts[parts.length - 2] : parts[1]].filter(Boolean).join(', ');
+          }
+        }
+      } catch (err) {
+        console.error('[settings] home location', (err as Error).message);
+      }
+      if (s.homeLat === null) homeNote = '&home=notfound';
+    }
+  }
   await saveSettings(c.get('user'), s);
-  return c.redirect('/settings?saved=1');
+  return c.redirect('/settings?saved=1' + homeNote);
 });
 
 app.post('/settings/clear-cache', async (c) => {
