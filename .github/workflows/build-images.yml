@@ -72,10 +72,15 @@ jobs:
           grep -q 'Example result 1' search.html
           grep -q 'class="filter active"' search.html
           grep -q 'engine-info' search.html
-          curl -fsS 'http://127.0.0.1:8080/search?q=smoke+news' | grep -q 'class="stories"'
-          ! curl -fsS 'http://127.0.0.1:8080/search?q=smoke+test' | grep -q 'class="stories"'
-          curl -fsS 'http://127.0.0.1:8080/search?q=infobox+place' | grep -q 'class="ib-map"'
-          curl -fsS 'http://127.0.0.1:8080/search?q=things+to+do+in+lisbon' | grep -q 'id="places"'
+          # Pages go to a file first: with pipefail, "curl | grep -q" fails
+          # (exit 23) whenever grep matches before curl has written it all.
+          ! grep -q 'class="stories"' search.html
+          curl -fsS 'http://127.0.0.1:8080/search?q=smoke+news' -o news.html
+          grep -q 'class="stories"' news.html
+          curl -fsS 'http://127.0.0.1:8080/search?q=infobox+place' -o place.html
+          grep -q 'class="ib-map"' place.html
+          curl -fsS 'http://127.0.0.1:8080/search?q=things+to+do+in+lisbon' -o lisbon.html
+          grep -q 'id="places"' lisbon.html
           test "$(curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8080/api/places?q=smoke+test')" = 204
           curl -fsS 'http://127.0.0.1:8080/search?q=smoke&tab=images' | grep -q 'img-card'
           curl -fsS 'http://127.0.0.1:8080/search?q=smoke&tab=videos' | grep -q 'data-embed='
