@@ -269,6 +269,7 @@ a cache-clear button, the keyboard shortcuts, and the bang list. Settings are st
 | `TOP_STORIES` | `true` | run the news search for the "Top stories" strip (users can also switch it off in Settings) |
 | `PLACES` | `true` | maps and attractions cards (also a per-user setting) |
 | `PLACES_MODEL` | `haiku` | Claude model that decides whether a query is about a place |
+| `GOOGLE_PLACES_API_KEY` | *(empty)* | optional: Google ratings, reviews, photos and hours on place cards (Places API (New)); photos are proxied so the key stays on the server |
 | `NOMINATIM_URL` | `https://nominatim.openstreetmap.org` | geocoder for place queries |
 | `OVERPASS_URL` | `https://overpass-api.de/api/interpreter` | Overpass API for the attractions list |
 | `OVERPASS_FALLBACK_URL` | *(empty)* | second Overpass server tried when the first fails; the public mirrors tend to hang, so it is off |
@@ -334,18 +335,31 @@ the completeness score, each card shows its distance (km or miles, a
 setting), the map marks your position, and a place's directions link starts
 from it.
 
-The results page asks `/api/places` from `app.js` after it has loaded, so
-neither Claude nor the map services ever hold the results up. A single place
-comes back as a knowledge panel for the right column (photo, what it is, the
-first paragraph from Wikipedia, a map, address, hours, phone, website,
-directions), placed above the overview's sources panel; when SearXNG already
-supplied a knowledge panel the page says so and no second one is sent. A
-category comes back as a map-and-list card for the main column; when the
-patterns recognised the query, the page draws that card's skeleton at once.
-The endpoint geocodes the place with Nominatim (on the pattern path only
-address types that are places count, which is what keeps "things to do in
-case of fire" out; on the Claude path any hit for the name it gave will do,
-so businesses work), asks Overpass for named features
+The classifier runs during the search request, alongside SearXNG, and
+gets a second and a half of grace after the results arrive (a cached verdict
+is instant). When it says the query is one place, or a kind of place around
+the user, the page skips the AI overview: the map answers that, and the
+card's skeleton is drawn where the card will land. When it is still thinking,
+the page renders as usual and the card is added when it comes. Either way
+the card itself is fetched by `app.js` from `/api/places` after the page has
+loaded, so the map services never hold the results up.
+
+A single place comes back as a knowledge panel for the right column, pinned
+while the results scroll: photo, what it is, the first paragraph from
+Wikipedia, a map, a copyable postal address, an hours table (OSM
+`opening_hours` parsed into weekday rows, today highlighted), a tap-to-call
+phone number, and directions by address in Google Maps or Apple Maps, from
+your location when known. When SearXNG already supplied a knowledge panel
+the page says so and no second one is sent. A kind of place comes back as a
+map-and-list card for the main column, each card with a photo when one
+exists, address, today's hours, distance, and Directions / Call / Site
+buttons. Geocoding: Nominatim, with the hit chosen by what Claude said the
+place is (a business or landmark must be a point of interest, never the
+city it shares a name with; on the pattern path only address types that are
+places count, which keeps "things to do in case of fire" out). Nominatim is
+weak at shop names, so a business it cannot find is looked up by name in
+OpenStreetMap through Overpass, within 15 km of the area in the query or of
+you. Lists then ask Overpass for named features
 with the category's tags in a box sized to the place (2–15 km for
 attractions, 1–4 km for restaurants), ranks them (Wikidata-linked and
 Wikipedia-linked first, then the well-described), and runs one Wikidata
@@ -361,10 +375,16 @@ hover sync. The dark theme inverts the tiles into a night map. OpenStreetMap
 asks that tile use stays light (this is one user's searches) and that the
 app identifies itself: requests carry `SITE_NAME/0.1 (+PUBLIC_URL)`.
 
-What this cannot match: reviews and star ratings (only Google and Yelp have
-them), and reliable opening hours (OpenStreetMap tags them sporadically). So
-the restaurant, café, bar and hotel categories order places by how complete
-their OpenStreetMap record is, which is a weak proxy for quality; the
+**Google reviews** exist behind a key only. With `GOOGLE_PLACES_API_KEY`
+set (Places API (New)), one Text Search per place adds the Google rating,
+review count, up to three reviews, Google's own hours (with open/closed
+now), phone, address and photos to a panel; for a list, one search per kind
+adds ratings and photos to the cards it can match by name and position.
+Photos go through `/places/photo` so the key never reaches the browser;
+answers are cached for a week. Without the key, none of that appears and
+the rest works as described. OpenStreetMap on its own has no ratings and
+tags hours sporadically, so restaurant, café, bar and hotel lists are
+ordered by distance and record completeness, a weak proxy for quality; the
 attractions and museums categories, ranked by Wikidata and Wikipedia
 presence, come out close to a guidebook's list. Overpass is the slow step
 (2–4 s for a big city, occasionally a timeout: the card then shows the map

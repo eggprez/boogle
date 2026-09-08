@@ -55,6 +55,9 @@ export const config = {
   // "nothing found" answer (overpass.kumi.systems took 30 s to not answer).
   overpassFallbackUrl: str('OVERPASS_FALLBACK_URL', ''),
   wikidataSparqlUrl: str('WIKIDATA_SPARQL_URL', 'https://query.wikidata.org/sparql'),
+  // Optional Google Places API key: Google ratings, reviews, photos and hours
+  // on place cards (gplaces.ts). Empty = those parts are simply absent.
+  googlePlacesKey: str('GOOGLE_PLACES_API_KEY', ''),
   // {z}/{x}/{y} template the browser loads map tiles from.
   mapTileUrl: str('MAP_TILE_URL', 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'),
 

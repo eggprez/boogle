@@ -31,22 +31,33 @@ export function queryTerms(q: string): string[] {
 
 /**
  * The stories worth a strip for this query, or an empty list. A story
- * qualifies when it is under a week old and its title or snippet mentions
- * most of the query's terms; the strip needs three of those from three
- * different sites, the newest under two days old.
+ * qualifies when its title or snippet mentions most of the query's terms
+ * and it is under a week old; the strip needs three of those from three
+ * different sites, and the topic has to be current: a dated story under
+ * two days old, or mostly undated stories.
+ *
+ * Dates are the weak part: of the news engines only Reuters (and Google
+ * News, when it answers) stamp a publishedDate; Bing News and Startpage
+ * News never do. The news search is already limited to the past week, so an
+ * undated story from it counts as recent rather than being thrown away, or
+ * "apple event" on the day of the event would show nothing.
  */
 export function pickStories(q: string, results: SearxResult[], now = Date.now()): SearxResult[] {
   const terms = queryTerms(q);
   if (!terms.length) return [];
   const needed = terms.length === 1 ? 1 : Math.ceil(terms.length * 0.6);
 
-  const fresh: { r: SearxResult; age: number }[] = [];
+  const fresh: { r: SearxResult; age: number | null }[] = [];
   for (const r of results) {
-    if (!r.publishedDate || !r.url || !r.title) continue;
-    const t = new Date(r.publishedDate).getTime();
-    if (Number.isNaN(t)) continue;
-    const age = now - t;
-    if (age > MAX_AGE_MS || age < -3_600_000) continue;
+    if (!r.url || !r.title) continue;
+    let age: number | null = null;
+    if (r.publishedDate) {
+      const t = new Date(r.publishedDate).getTime();
+      if (!Number.isNaN(t)) {
+        age = now - t;
+        if (age > MAX_AGE_MS || age < -3_600_000) continue;
+      }
+    }
     const text = `${r.title} ${r.content ?? ''}`.toLowerCase();
     let matched = 0;
     for (const term of terms) if (text.includes(term)) matched++;
@@ -65,8 +76,9 @@ export function pickStories(q: string, results: SearxResult[], now = Date.now())
     if (picked.length === MAX_STORIES) break;
   }
   if (picked.length < MIN_STORIES) return [];
-  if (Math.min(...fresh.map((f) => f.age)) > CURRENT_MS) return [];
-  return picked;
+  const dated = fresh.filter((f) => f.age !== null) as { r: SearxResult; age: number }[];
+  const current = dated.some((f) => f.age <= CURRENT_MS) || dated.length * 2 < fresh.length;
+  return current ? picked : [];
 }
 
 function hostKey(url: string): string {

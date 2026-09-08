@@ -8,6 +8,7 @@ import { resolveBang } from './bangs.js';
 import { cacheStats, clearCache } from './cache.js';
 import { config } from './config.js';
 import { getFavicon, validHost } from './favicons.js';
+import { fetchPhoto } from './gplaces.js';
 import { generateFollowup, generateOverview, type OverviewEvent } from './overview/index.js';
 import { claudeVersion, type FollowupTurn } from './overview/claude.js';
 import { topStories } from './news.js';
@@ -80,6 +81,13 @@ app.get('/search', async (c) => {
 
   const first = tab === 'web' && page === 1;
   const searchOpts = { safesearch: settings.safesearch, language: settings.language, timeRange, fresh };
+  // Is this query about a place? The classifier (patterns, else Claude,
+  // cached) runs alongside the SearXNG request; its answer decides whether
+  // the page gets a map panel instead of an AI overview. It gets a little
+  // grace after the search returns; past that the page renders as usual and
+  // the client's places request still shows the card when it comes.
+  const placesOn = first && config.places && settings.places;
+  const classify = placesOn ? classifyPlace(q) : Promise.resolve(null);
   let data: SearxResponse | null = null;
   let error: string | undefined;
   let stories: SearxResult[] = [];
@@ -91,12 +99,12 @@ app.get('/search', async (c) => {
     error = (err as Error).message;
     console.error('[search]', q, error);
   }
-  // Places: the client asks /api/places for every first web page (a Claude
-  // classifier decides there); a query the patterns already recognise as a
-  // list of places gets its skeleton drawn in the page straight away.
-  const placesOn = first && config.places && settings.places && !error;
-  const placesPending = placesOn && placeIntent(q)?.kind === 'list';
-  return c.html(resultsPage({ q, tab, page, timeRange, data, error, settings, overviewMode, stories, placesOn, placesPending }));
+  const intent = placesOn ? await Promise.race([classify, new Promise<undefined>((r) => setTimeout(() => r(undefined), 1500))]) : null;
+  // One place, or a kind of place around the user: the map answers that,
+  // an overview would only restate it.
+  const noOverview = !!intent && (intent.kind === 'place' || !intent.place);
+  const placesPending = !placesOn || error ? false : intent === undefined ? false : intent === null ? false : intent.kind === 'place' ? 'side' : 'main';
+  return c.html(resultsPage({ q, tab, page, timeRange, data, error, settings, overviewMode, stories, placesOn: placesOn && !error, placesPending, noOverview }));
 });
 
 // The places card for a query, as an HTML fragment the results page puts
@@ -135,6 +143,19 @@ app.get('/api/places', async (c) => {
   // The server memoises the data for a day; the browser must not also keep
   // a copy, or an Overpass hiccup's empty card would stick for the cache's life.
   return c.html(placesCard(data, { target, q, units: settings.units, from: user }), 200, { 'Cache-Control': 'no-store' });
+});
+
+// Google Places photos, through the server so the API key stays here.
+app.get('/places/photo', async (c) => {
+  const name = c.req.query('name') ?? '';
+  const photo = await fetchPhoto(name).catch(() => null);
+  if (!photo) return c.body(null, 404, { 'Cache-Control': 'private, max-age=3600' });
+  return c.body(new Uint8Array(photo.body), 200, {
+    'Content-Type': photo.type,
+    'Cache-Control': 'private, max-age=604800, immutable',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'",
+  });
 });
 
 app.get('/suggest', async (c) => {

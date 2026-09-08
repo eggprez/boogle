@@ -706,8 +706,11 @@
       const card = tpl.content.firstElementChild;
       if (!card) return slot?.remove();
       if (card.dataset.place === 'side') {
-        slot?.remove();
-        mountSide(card);
+        if (slot?.closest('.place-side')) slot.replaceWith(card);
+        else {
+          slot?.remove();
+          mountSide(card);
+        }
       } else if (slot) slot.replaceWith(card);
       else {
         const main = resultsLayout.querySelector('.main-col');
@@ -724,11 +727,47 @@
     const aside = document.createElement('aside');
     aside.className = 'side-col place-side';
     aside.appendChild(card);
-    // Above the overview's sources panel when there is one; it re-fits itself.
-    resultsLayout.insertBefore(aside, document.getElementById('ov-side'));
+    // The right column is one stack: above the overview's sources panel
+    // when there is one (it re-fits itself).
+    let stack = resultsLayout.querySelector('.side-stack');
+    if (!stack) {
+      stack = document.createElement('div');
+      stack.className = 'side-stack';
+      resultsLayout.appendChild(stack);
+    }
+    stack.insertBefore(aside, document.getElementById('ov-side'));
     window.dispatchEvent(new Event('resize'));
   }
+  // Copy buttons (the address) and today's line of an hours table.
+  document.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('.copy-btn');
+    if (!btn) return;
+    try {
+      await navigator.clipboard.writeText(btn.dataset.copy);
+      btn.classList.add('done');
+      btn.title = 'Copied';
+      setTimeout(() => { btn.classList.remove('done'); btn.title = 'Copy'; }, 1500);
+    } catch { /* no clipboard (plain http): the text is selectable */ }
+  });
+  function markToday(root) {
+    const today = (new Date().getDay() + 6) % 7; // Monday = 0
+    for (const tr of root.querySelectorAll('.hours tr[data-days]')) {
+      if (tr.dataset.days.split(',').map(Number).includes(today)) {
+        tr.classList.add('today');
+        const sum = tr.closest('.hours')?.querySelector('[data-today-hours]');
+        if (sum && !sum.textContent) sum.textContent = `Today ${tr.lastElementChild.textContent}`;
+      }
+    }
+    for (const card of root.querySelectorAll('.place-card[data-hours]')) {
+      try {
+        const text = JSON.parse(card.dataset.hours)[today];
+        const el = card.querySelector('[data-today-hours] span');
+        if (el && text) el.textContent = /^closed$/i.test(text) ? 'Closed today' : `Today ${text}`;
+      } catch { /* */ }
+    }
+  }
   function wirePins(root) {
+    markToday(root);
     // "Try again" after a map-service timeout: swap the card back to the
     // skeleton and fetch once more, bypassing the server's memo.
     root.querySelector('.places-retry')?.addEventListener('click', (ev) => {

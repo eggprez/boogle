@@ -1,4 +1,6 @@
+import { formatNominatimAddress, formatTagAddress, type NominatimAddress } from './address.js';
 import { config } from './config.js';
+import { gplacesEnabled, matchPlace, ratePlaces, type GooglePlace } from './gplaces.js';
 
 // Places: the map cards Google shows for a place ("denver", "golden gate
 // bridge", a business), for a kind of place somewhere ("things to do in
@@ -186,6 +188,10 @@ export interface Place extends Geo {
   name: string;
   /** "Lisboa, Portugal" */
   displayName: string;
+  /** postal address, "990 Lincoln Street, Denver, CO 80203"; '' for an area */
+  address?: string;
+  /** Google's record, when a Places API key is configured (rating, reviews, hours, photos) */
+  google?: GooglePlace;
   /** Nominatim's addresstype: city, town, country, ...; "user" for the user's own position */
   type: string;
   /** Nominatim's category/type, e.g. "amenity restaurant", for the panel's subtitle */
@@ -222,10 +228,13 @@ export interface Attraction {
   article?: string;
   cuisine?: string;
   openingHours?: string;
+  /** postal address from addr:* tags, when there is a street */
   address?: string;
   phone?: string;
   /** km from the user, when the list is around them */
   distanceKm?: number;
+  /** Google's record, when a Places API key is configured */
+  google?: GooglePlace;
 }
 
 export interface UserLocation {
@@ -284,14 +293,32 @@ export function buildPlaces(intent: PlaceIntent, opts: { fresh?: boolean; user?:
 async function resolve(intent: PlaceIntent, user: UserLocation | null): Promise<PlacesData | null> {
   if (intent.kind === 'place') {
     // The pattern path has only a regular expression's word for it that the
-    // text is a place, so Nominatim's answer must be place-shaped; Claude has
-    // already said what the query is about, so any hit for its name will do.
-    const place = await geocode(intent.place, { strict: intent.source !== 'claude' });
+    // text is a place, so Nominatim's answer must be place-shaped. Claude
+    // has said what kind of place it is: for a business or landmark a point
+    // of interest is wanted, not the city it happens to share a name with,
+    // and when Nominatim (weak at shop names) finds nothing, Overpass is
+    // asked for the name near the area or the user.
+    const poi = intent.source === 'claude' && POI_KINDS.has(intent.placeKind ?? '');
+    const prefer = intent.source !== 'claude' ? 'area' : poi ? 'poi' : 'any';
+    let place = await geocode(intent.place, { prefer });
+    if (!place && poi) place = await findByName(intent.place, user);
     if (!place) return null;
     try {
       await enrichPlace(place);
     } catch (err) {
       console.error('[places] enrich', intent.place, (err as Error).message);
+    }
+    if (gplacesEnabled()) {
+      try {
+        place.google = (await matchPlace(place.name, place.address ?? '', place)) ?? undefined;
+        if (place.google) {
+          place.phone ||= place.google.phone;
+          place.website ||= place.google.website;
+          place.address ||= place.google.address;
+        }
+      } catch (err) {
+        console.error('[places] google', intent.place, (err as Error).message);
+      }
     }
     return { kind: 'place', heading: place.name, place, items: [] };
   }
@@ -331,8 +358,65 @@ async function resolve(intent: PlaceIntent, user: UserLocation | null): Promise<
     } catch (err) {
       console.error('[places] wikidata', intent.place, (err as Error).message);
     }
+    if (gplacesEnabled()) {
+      try {
+        const rated = await ratePlaces(label, items, place);
+        for (const [i, g] of rated) items[i].google = g;
+      } catch (err) {
+        console.error('[places] google', label, (err as Error).message);
+      }
+    }
   }
   return { kind: 'list', category: intent.category, heading, place, items, nearUser: !intent.place, failed };
+}
+
+/** Claude's kinds that name a point of interest rather than an area. */
+const POI_KINDS = new Set(['landmark', 'natural', 'park', 'museum', 'venue', 'business', 'other']);
+/** Nominatim classes that are areas, not points of interest. */
+const AREA_CLASSES = new Set(['boundary', 'place']);
+
+/**
+ * A business Nominatim could not find, looked up by name in OpenStreetMap
+ * through Overpass: "Joe's Pizza, Denver, Colorado" becomes a name search
+ * within 15 km of Denver; without an area, around the user.
+ */
+async function findByName(full: string, user: UserLocation | null): Promise<Place | null> {
+  const [name, ...rest] = full.split(',').map((s) => s.trim()).filter(Boolean);
+  if (!name) return null;
+  let center: { lat: number; lon: number } | null = null;
+  let city = '';
+  if (rest.length) {
+    const area = await geocode(rest.join(', '), { prefer: 'area' }).catch(() => null);
+    if (area) {
+      center = area;
+      city = area.name;
+    }
+  }
+  if (!center && user) center = user;
+  if (!center) return null;
+  const re = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/'/g, "['’]");
+  const box = `(${boxAround(center.lat, center.lon, 15)})`;
+  const els = await overpass(`[out:json][timeout:10];nwr["name"~"${re}",i]${box};out center tags 10;`);
+  const ranked = rankAttractions(els, center).filter((a) => a.kind && !/^(place|boundary)/.test(a.kind));
+  const a = ranked[0];
+  if (!a) return null;
+  return {
+    name: a.name,
+    displayName: a.address ? `${a.name}, ${a.address}` : `${a.name}${city ? ', ' + city : ''}`,
+    address: a.address,
+    type: a.kind,
+    kindLabel: a.kind,
+    lat: a.lat,
+    lon: a.lon,
+    osmType: a.osmType,
+    osmId: a.osmId,
+    wikidata: a.wikidata,
+    wikipedia: a.wikipedia,
+    website: a.website,
+    phone: a.phone,
+    openingHours: a.openingHours,
+    description: a.description,
+  };
 }
 
 // Only these Nominatim address types are places one asks for things "in":
@@ -361,8 +445,14 @@ interface NominatimHit {
   error?: string;
 }
 
-export async function geocode(name: string, opts: { strict?: boolean } = {}): Promise<Place | null> {
-  const params = new URLSearchParams({ q: name, format: 'jsonv2', limit: '3', addressdetails: '1', extratags: '1', 'accept-language': 'en' });
+/**
+ * prefer 'area': only cities, regions and the like (the pattern path).
+ * prefer 'poi': a point of interest, never the area it is named after.
+ * prefer 'any': an area if there is one, else the first hit.
+ */
+export async function geocode(name: string, opts: { prefer?: 'area' | 'poi' | 'any'; strict?: boolean } = {}): Promise<Place | null> {
+  const prefer = opts.prefer ?? (opts.strict === false ? 'any' : 'area');
+  const params = new URLSearchParams({ q: name, format: 'jsonv2', limit: '5', addressdetails: '1', extratags: '1', 'accept-language': 'en' });
   const res = await fetch(`${config.nominatimUrl}/search?${params}`, {
     headers: { 'User-Agent': UA, Accept: 'application/json' },
     signal: AbortSignal.timeout(5_000),
@@ -370,7 +460,9 @@ export async function geocode(name: string, opts: { strict?: boolean } = {}): Pr
   if (!res.ok) throw new Error(`Nominatim responded ${res.status}`);
   const hits = (await res.json()) as NominatimHit[];
   const typeOf = (x: NominatimHit) => x.addresstype ?? x.category ?? '';
-  const h = (opts.strict === false ? (hits.find((x) => PLACE_TYPES.has(typeOf(x))) ?? hits[0]) : hits.find((x) => PLACE_TYPES.has(typeOf(x)))) ?? null;
+  const isArea = (x: NominatimHit) => PLACE_TYPES.has(typeOf(x)) || AREA_CLASSES.has(x.category ?? '');
+  const h =
+    (prefer === 'area' ? hits.find((x) => PLACE_TYPES.has(typeOf(x))) : prefer === 'poi' ? hits.find((x) => !isArea(x)) : (hits.find((x) => PLACE_TYPES.has(typeOf(x))) ?? hits[0])) ?? null;
   if (!h) return null;
   return toPlace(h, name);
 }
@@ -398,9 +490,11 @@ function toPlace(h: NominatimHit, fallbackName: string): Place {
   const type = h.addresstype ?? h.category ?? '';
   const bb = h.boundingbox?.map(Number) as [number, number, number, number] | undefined;
   const t = h.extratags ?? {};
+  const addr = h.address as NominatimAddress | undefined;
   return {
     name: h.name || h.display_name?.split(',')[0] || fallbackName,
     displayName: h.display_name ?? fallbackName,
+    address: AREA_CLASSES.has(h.category ?? '') ? '' : formatNominatimAddress(addr, { country: true }),
     type,
     kindLabel: [h.category, h.type].filter((x) => x && x !== 'yes').join(' ').replace(/_/g, ' ') || undefined,
     lat: Number(h.lat),
@@ -568,8 +662,10 @@ export function rankAttractions(elements: OverpassElement[], from?: { lat: numbe
       (t.image || t.wikimedia_commons ? 0.5 : 0) +
       (kind === 'place_of_worship' ? -1 : 0) -
       (dist ?? 0);
-    const street = t['addr:street'];
-    const address = street ? `${t['addr:housenumber'] ? t['addr:housenumber'] + ' ' : ''}${street}` : undefined;
+    const address = formatTagAddress(t) || undefined;
+    // A photo without Wikidata: OSM's own image tag, or a Commons file.
+    const commons = t.wikimedia_commons && /^File:/i.test(t.wikimedia_commons) ? `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(t.wikimedia_commons.slice(5))}?width=400` : undefined;
+    const image = t.image && /^https:\/\/\S+\.(jpe?g|png|webp)(\?\S*)?$/i.test(t.image) ? t.image : commons;
     scored.push({
       a: {
         name,
@@ -587,6 +683,7 @@ export function rankAttractions(elements: OverpassElement[], from?: { lat: numbe
         address,
         phone: t.phone || t['contact:phone'],
         distanceKm: dist,
+        image,
       },
       score,
     });
@@ -628,7 +725,7 @@ async function enrich(items: Attraction[]): Promise<void> {
   for (const a of items) {
     const b = a.wikidata ? byId.get(a.wikidata) : undefined;
     if (!b) continue;
-    if (b.image?.value) a.image = commonsThumb(b.image.value);
+    if (b.image?.value) a.image ||= commonsThumb(b.image.value);
     if (b.itemDescription?.value) a.description = b.itemDescription.value;
     if (b.article?.value) a.article = b.article.value;
   }

@@ -52,8 +52,10 @@ export function resultsPage(opts: {
   stories?: SearxResult[];
   /** the client should ask /api/places about this query */
   placesOn?: boolean;
-  /** the patterns already know it is a list of places: draw the slot now */
-  placesPending?: boolean;
+  /** the classifier already answered: draw the card's slot now, in the main column (a list) or the right column (one place) */
+  placesPending?: 'main' | 'side' | false;
+  /** the query is a place or a local list: the map answers it, no AI overview */
+  noOverview?: boolean;
 }): string {
   const { q, tab, page, data, settings, timeRange } = opts;
   const target = settings.openInNewTab ? ' target="_blank" rel="noopener"' : ' rel="noopener"';
@@ -90,7 +92,7 @@ export function resultsPage(opts: {
   const aside = infobox && tab === 'web' ? infoboxCard(infobox, target, ibMap) : '';
   // A knowledge-panel query (a person, place, film, ...) is answered by the
   // infobox already; an AI overview next to it would be redundant.
-  const showOverview = settings.overviewEnabled && tab === 'web' && page === 1 && !opts.error && !aside;
+  const showOverview = settings.overviewEnabled && tab === 'web' && page === 1 && !opts.error && !aside && !opts.noOverview;
   const t = timeRange ? `&t=${timeRange}` : '';
   const link = (params: string) => `/search?q=${encodeURIComponent(q)}${params}`;
 
@@ -157,9 +159,12 @@ export function resultsPage(opts: {
     : '';
   // Places: the card is fetched after the page loads (app.js) so a slow map
   // service never holds the results up; this is the slot it lands in.
-  const placesHtml = opts.placesPending
-    ? `<section class="places places-pending" id="places" data-q="${e(q)}" aria-busy="true"><div class="places-skel"></div></section>`
-    : '';
+  const placesHtml =
+    opts.placesPending === 'main' ? `<section class="places places-pending" id="places" data-q="${e(q)}" aria-busy="true"><div class="places-skel"></div></section>` : '';
+  const placesSide =
+    opts.placesPending === 'side'
+      ? `<aside class="side-col place-side"><section class="infobox place-panel places-pending" id="places" data-q="${e(q)}" aria-busy="true"><div class="places-skel"></div></section></aside>`
+      : '';
 
   const related = (data?.suggestions ?? []).slice(0, 8);
   const relatedHtml =
@@ -239,7 +244,7 @@ export function resultsPage(opts: {
     ${relatedHtml}
     ${pager}
   </div>
-  ${aside ? `<aside class="side-col">${aside}</aside>` : showOverview ? ovSide : ''}
+  ${aside || placesSide || showOverview ? `<div class="side-stack">${aside ? `<aside class="side-col">${aside}</aside>` : ''}${placesSide}${showOverview ? ovSide : ''}</div>` : ''}
 </main>
 <footer class="foot"><span>${e(config.siteName)}</span> · Results by SearXNG · Overview by Claude · <a href="/settings">Settings</a></footer>`,
   });

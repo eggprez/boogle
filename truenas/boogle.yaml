@@ -75,6 +75,8 @@ services:
       # "Top stories" strip and OpenStreetMap maps/attractions; "false" turns one off for everyone.
       TOP_STORIES: "true"
       PLACES: "true"
+      # Optional: Google ratings, reviews, photos and hours on place cards (Places API (New) key).
+      GOOGLE_PLACES_API_KEY: ""
     volumes:
       - boogle-data:/data
       - boogle-claude-home:/home/node

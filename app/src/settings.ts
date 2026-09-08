@@ -48,7 +48,7 @@ export const DEFAULT_SETTINGS: Settings = {
   homeLat: null,
   homeLon: null,
   homeLabel: '',
-  units: 'km',
+  units: 'mi',
 };
 
 export const MODELS: { id: Model; label: string; blurb: string }[] = [

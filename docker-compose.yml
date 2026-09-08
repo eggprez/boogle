@@ -80,6 +80,7 @@ services:
       - OVERPASS_FALLBACK_URL=${OVERPASS_FALLBACK_URL:-}
       - WIKIDATA_SPARQL_URL=${WIKIDATA_SPARQL_URL:-}
       - MAP_TILE_URL=${MAP_TILE_URL:-}
+      - GOOGLE_PLACES_API_KEY=${GOOGLE_PLACES_API_KEY:-}
     volumes:
       - boogle-data:/data
       - boogle-claude-home:/home/node

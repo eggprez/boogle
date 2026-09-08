@@ -34,6 +34,6 @@ describe('sanitize', () => {
     const s = sanitize({ home: ' Denver, CO ', homeLat: 39.74, homeLon: -104.99, homeLabel: 'Denver, Colorado', units: 'mi' });
     expect(s).toMatchObject({ home: 'Denver, CO', homeLat: 39.74, homeLon: -104.99, homeLabel: 'Denver, Colorado', units: 'mi' });
     expect(sanitize({ homeLat: 95, homeLon: 0 }).homeLat).toBeNull();
-    expect(sanitize({ units: 'furlongs' }).units).toBe('km');
+    expect(sanitize({ units: 'furlongs' }).units).toBe('mi');
   });
 });

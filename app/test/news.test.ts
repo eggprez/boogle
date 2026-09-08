@@ -40,8 +40,17 @@ describe('pickStories', () => {
     const stale = [story('a.com', 'Apple event', 60), story('b.com', 'Apple event', 70), story('c.com', 'Apple event', 80)];
     expect(pickStories('apple event', stale, NOW)).toEqual([]);
   });
-  it('ignores stories older than a week and undated ones', () => {
-    const list = [story('a.com', 'Apple event', 3), story('b.com', 'Apple event', 5), story('c.com', 'Apple event', 24 * 9), { url: 'https://d.com/', title: 'Apple event' }];
+  it('ignores stories older than a week', () => {
+    const list = [story('a.com', 'Apple event', 3), story('b.com', 'Apple event', 5), story('c.com', 'Apple event', 24 * 9)];
+    expect(pickStories('apple event', list, NOW)).toEqual([]);
+  });
+  it('counts undated stories from the week-limited news search as recent', () => {
+    const undated = (host: string, title: string): SearxResult => ({ url: `https://${host}/x`, title });
+    const list = [undated('mashable.com', 'How to watch the Apple event'), undated('cnet.com', 'Apple event live'), undated('macrumors.com', 'Apple event tomorrow'), story('reuters.com', 'Apple event: what to expect', 40)];
+    expect(pickStories('apple event', list, NOW)).toHaveLength(4);
+  });
+  it('still rejects a topic whose only dated coverage is old', () => {
+    const list = [story('a.com', 'Apple event', 60), story('b.com', 'Apple event', 70), story('c.com', 'Apple event', 80), { url: 'https://d.com/', title: 'Apple event' }];
     expect(pickStories('apple event', list, NOW)).toEqual([]);
   });
   it('rejects coverage that only shares one word with a multi-word query', () => {
