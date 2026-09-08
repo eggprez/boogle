@@ -19,9 +19,9 @@
 #          to Bing's index and SearXNG's parser currently returns nothing from
 #          it; DuckDuckGo, Qwant and Mojeek answer server requests with a
 #          CAPTCHA or an access-denied page. Reddit is pulled into web
-#          results the way Google surfaces it (own API credentials
-#          recommended, see below); Stack Overflow is off because its API
-#          quota (300 requests/day per IP) kept it suspended.
+#          results through the PullPush archive (reddit.com itself refuses
+#          server requests); Stack Overflow is off because its API quota
+#          (300 requests/day per IP) kept it suspended.
 #   images icon libraries (devicons, lucide) produced ~70% of results and stock
 #          photo sites added unrelated photos; only real web-image engines stay.
 #   videos vimeo was erroring; small federated sources removed.
@@ -88,28 +88,13 @@ engines:
   - name: google
     disabled: false
     weight: 2.0
-  # GOOGLE_CSE_ID on the container swaps in your own Programmable Search
-  # Engine ID; entrypoint.sh fills in, or drops, the placeholder line. Only
-  # an engine set to "search the entire web" makes sense here, and Google
-  # stopped creating those on 2026-01-20 (new ones are capped at 50 sites;
-  # existing whole-web ones end 2027-01-01). Without it SearXNG's shared
-  # public ID is used, which Google rate-limits for everyone at once
-  # ("unusual traffic" -> engine suspended) and which has the same end date.
+  # Google's Programmable Search results through the ID SearXNG ships with.
+  # Google rate-limits that shared ID for every SearXNG install at once
+  # ("unusual traffic" -> engine suspended for a minute), and whole-web
+  # engines of this kind end on 2027-01-01. A second Google-derived list is
+  # still worth having while it lasts: pages on both get the agreement bonus.
   - name: google cse
     weight: 1.5
-    CX: "__GOOGLE_CSE_ID__"
-  # Your own Programmable Search Engine limited to up to 50 sites you trust
-  # (GOOGLE_SITES_CSE_ID on the container; entrypoint.sh fills in the ID and
-  # enables the engine). It runs alongside the general engines, so a hit on
-  # one of your sites that Google also lists gets the agreement bonus, while
-  # its solo picks stay low on the page.
-  - name: google sites
-    engine: google_cse
-    shortcut: gs
-    categories: [general, web]
-    disabled: true  # boogle:google-sites
-    weight: 0.7
-    CX: "__GOOGLE_SITES_CSE_ID__"
   - name: brave
     weight: 1.0
   - name: bing
@@ -126,24 +111,16 @@ engines:
   - name: duckduckgo
     disabled: true            # CAPTCHA on every request; DDG results are Bing's anyway
 
-  # Reddit, two ways. With REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET set on the
-  # container (a free "script" app from reddit.com/prefs/apps) the official
-  # API engine below runs and the archive fallback is switched off by
-  # entrypoint.sh. Without credentials the official engine is not loaded and
-  # search goes through pullpush.io, a third-party archive that rate-limits
-  # hard (HTTP 429 -> suspended). Reddit threads also keep arriving via
-  # Google/Brave/Bing either way.
+  # Reddit through pullpush.io, a third-party archive of posts ranked by
+  # score. reddit.com answers server requests with HTTP 403 and SearXNG
+  # dropped its Reddit engine; the official API needs per-user app
+  # credentials, which is more setup than it is worth for one person. The
+  # archive rate-limits bursts (HTTP 429 -> suspended for a minute), and
+  # Reddit threads keep arriving via Google/Brave/Bing regardless.
   - name: reddit
-    engine: reddit_oauth
+    engine: json_engine
     shortcut: re
     categories: [general, social media]
-    weight: 0.8
-    timeout: 6.0
-  - name: reddit archive
-    engine: json_engine
-    shortcut: rea
-    categories: [general, social media]
-    disabled: false  # boogle:reddit-fallback
     search_url: https://api.pullpush.io/reddit/search/submission/?q={query}&size=20&sort=desc&sort_type=score
     results_query: data
     url_query: permalink
@@ -174,9 +151,14 @@ engines:
   # Kept: wikipedia (abstract card), wikidata (infobox), currency (instant answer)
 
   # ------------------------------------------------------------- images ----
-  - name: google cse images
+  # google.com's own image results (upstream ships this engine off; it works
+  # from a home IP). The shared-ID "google cse images" is throttled for every
+  # SearXNG install at once and ends 2027-01-01, so it is off.
+  - name: google images
+    disabled: false
     weight: 2.0
-    CX: "__GOOGLE_CSE_ID__"
+  - name: google cse images
+    disabled: true
   - name: startpage images
     weight: 1.5
   - name: brave.images

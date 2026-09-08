@@ -3,9 +3,10 @@
 #   Apps -> Discover Apps -> (three dots, top right) -> Install via YAML
 #   Name: boogle    Paste this file, then change the two CHANGE_ME values.
 #
-# Nothing needs to be copied to the NAS: both images already contain the code
-# and SearXNG's settings.yml. Claude login and the overview cache live in the
-# two named volumes at the bottom, so they survive restarts and updates.
+# Nothing needs to be copied to the NAS: the images already contain the code
+# and SearXNG's settings.yml. Claude login, the overview cache and the Reddit
+# worker's cache live in the named volumes at the bottom, so they survive
+# restarts and updates.
 
 services:
   searxng:
@@ -17,15 +18,26 @@ services:
       SEARXNG_SECRET: "CHANGE_ME_random_hex"      # any long random string
       SEARXNG_LIMITER: "false"
       SEARXNG_PUBLIC_INSTANCE: "false"
-      # Optional, but recommended: your own search credentials so Google and
-      # Reddit stop rate-limiting the shared/anonymous access (README, "Your
-      # own Google and Reddit credentials"). Leave empty to use the defaults.
-      GOOGLE_CSE_ID: ""          # only an existing whole-web Programmable Search Engine ID (new ones are site-limited; see README)
-      GOOGLE_SITES_CSE_ID: ""    # a Programmable Search Engine limited to up to 50 sites you pick (README)
-      REDDIT_CLIENT_ID: ""       # from a "script" app at reddit.com/prefs/apps
-      REDDIT_CLIENT_SECRET: ""
     cap_drop: [ALL]
     cap_add: [CHOWN, SETGID, SETUID]
+    logging:
+      driver: json-file
+      options: { max-size: "1m", max-file: "1" }
+
+  # Headless browser that backfills Reddit results for queries you ran (see
+  # README, "Reddit through a headless browser"). Optional: delete this
+  # service and set REDDIT_WORKER_URL below to "" to go without.
+  reddit:
+    image: ghcr.io/eggprez/boogle-reddit:latest
+    container_name: boogle-reddit
+    restart: unless-stopped
+    init: true
+    environment:
+      REDDIT_MIN_INTERVAL_MS: "5000"   # gap between two Reddit searches
+      REDDIT_CACHE_TTL_HOURS: "72"     # how long a query's Reddit results are kept
+    volumes:
+      - boogle-reddit:/data
+    cap_drop: [ALL]
     logging:
       driver: json-file
       options: { max-size: "1m", max-file: "1" }
@@ -42,6 +54,8 @@ services:
       PUBLIC_URL: "http://CHANGE_ME_truenas_ip:8081"   # what you type in the browser
       ACCENT_COLOR: "#6d28d9"
       SEARXNG_URL: "http://searxng:8080"
+      REDDIT_WORKER_URL: "http://reddit:8080"
+      REDDIT_WEIGHT: "0.8"
       # AUTH_MODE: none  = no login, fine while it is only reachable on your LAN.
       # AUTH_MODE: proxy = behind NGINX + TinyAuth (see README); required before
       #                    exposing it to the internet, since it runs on your
@@ -68,3 +82,4 @@ services:
 volumes:
   boogle-data:
   boogle-claude-home:
+  boogle-reddit:

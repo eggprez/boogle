@@ -62,12 +62,13 @@ app/                   the Boogle web app (Node 24 + TypeScript + Hono)
 
 ## Deploy on TrueNAS SCALE (prebuilt images, nothing to copy)
 
-Every push to `main` makes GitHub Actions build two images and publish them:
+Every push to `main` makes GitHub Actions build three images and publish them:
 
 | Image | Contents |
 |---|---|
 | `ghcr.io/eggprez/boogle` | the web app plus the Claude Code CLI |
 | `ghcr.io/eggprez/boogle-searxng` | upstream SearXNG, the Wikidata patch, and `searxng/settings.yml` baked in |
+| `ghcr.io/eggprez/boogle-reddit` | Playwright's Chromium plus the Reddit worker (optional, see below) |
 
 So a Docker host only has to pull them. On TrueNAS SCALE 24.10+:
 
@@ -75,45 +76,21 @@ So a Docker host only has to pull them. On TrueNAS SCALE 24.10+:
    and paste [`truenas/boogle.yaml`](truenas/boogle.yaml). Change the two
    `CHANGE_ME` values: `SEARXNG_SECRET` (any long random string) and
    `PUBLIC_URL` (your NAS address, e.g. `http://192.168.1.50:8081`). Save.
-   TrueNAS pulls both images and starts them; give it a minute.
+   TrueNAS pulls the images and starts them; give it a minute.
 2. **Log the Claude CLI in, once.** Apps → boogle → the `boogle` container →
    Shell. Run `claude`, choose the subscription login, open the URL it prints in
    your normal browser, paste the code back, then type `/exit`. The login is kept
    in the `boogle-claude-home` volume. (Alternative: run `claude setup-token`
    there instead and paste the token into `CLAUDE_CODE_OAUTH_TOKEN` in the YAML.)
 3. Open `http://<nas-ip>:8081` and search. The Settings page (gear icon) has a
-   status panel showing whether SearXNG and the Claude CLI are reachable.
+   status panel showing whether SearXNG, the Claude CLI and the Reddit worker
+   are reachable.
 
 Updates: TrueNAS shows an update for the app whenever the `latest` images change
 (every push, plus a weekly rebuild that picks up upstream SearXNG and Claude Code
 releases). The YAML ships with `AUTH_MODE: none`, which is fine while the port is
 only reachable on your LAN; before putting it behind a public hostname switch to
 `proxy` and follow the NGINX + TinyAuth section below.
-
-## Your own Google and Reddit credentials
-
-Out of the box SearXNG reaches Google through a search-engine ID shared by every
-SearXNG install and Reddit through a third-party archive. Both get rate-limited,
-which shows up as "N search engines didn't respond (google cse, reddit, …)" and
-a few minutes of thinner results. Four values on the `searxng` container help
-with that; they are optional and independent.
-
-| Variable | Where it comes from |
-|---|---|
-| `GOOGLE_CSE_ID` | Only if you already own a Programmable Search Engine set to **Search the entire web**: copy its **Search engine ID** from https://programmablesearchengine.google.com (looks like `a1b2c3d4e5f6g7h8i`; no API key needed). Google stopped offering whole-web engines to new users on 20 January 2026; new engines are limited to 50 sites, and existing whole-web engines stop on 1 January 2027. Do **not** put a site-limited engine here: it feeds the general web and image results, so it would narrow every search to those sites. Leave it empty otherwise. |
-| `GOOGLE_SITES_CSE_ID` | The kind of engine Google still creates: https://programmablesearchengine.google.com → Add → name it, under **Sites to search** add up to 50 sites you trust (e.g. `reddit.com`, `stackoverflow.com`, `en.wikipedia.org`, `developer.mozilla.org`, `docs.python.org`) → Create → copy the **Search engine ID**. This runs as an extra `google sites` engine next to the general ones, so pages from your sites that Google also ranks get a boost, and its own picks stay low on the page. Edit the site list at any time without touching Boogle. |
-| `REDDIT_CLIENT_ID` | https://www.reddit.com/prefs/apps → **create another app** → type **script**, any name, redirect URI `http://localhost` → Create. The ID is the short string under the app name. |
-| `REDDIT_CLIENT_SECRET` | the **secret** shown on the same app. |
-
-Without a whole-web `GOOGLE_CSE_ID`, Google results come from the `google`
-engine (google.com directly, the highest-weighted source) plus SearXNG's shared
-Programmable Search ID, which is rate-limited and also ends on 1 January 2027.
-
-The free Reddit tier allows 100 requests a minute per app, far more than
-personal use needs. On TrueNAS put the values into the YAML (Apps → boogle →
-Edit) and save; with docker compose put them in `.env`. The SearXNG container
-logs one line per credential at start saying whether it was picked up. Keep the
-Reddit secret private: anyone with it can search Reddit as your app.
 
 ## Deploy with docker compose (any Docker host)
 
@@ -266,6 +243,16 @@ a cache-clear button, the keyboard shortcuts, and the bang list. Settings are st
 | `DEEP_READ_PAGES` | `5` | pages read in deep mode |
 | `DEEP_READ_CHARS_PER_PAGE` | `6000` | text cap per page in deep mode |
 | `SNIPPET_SOURCES` | `10` | results given to Claude in snippet and knowledge mode |
+| `REDDIT_WORKER_URL` | `http://reddit:8080` (compose) | the Reddit worker; empty = no Reddit backfill |
+| `REDDIT_WEIGHT` | `0.8` | engine weight Reddit threads get when merged into the ranking |
+
+On the `reddit` container:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `REDDIT_MIN_INTERVAL_MS` | `5000` | minimum gap between two Reddit searches (plus up to 2 s of jitter) |
+| `REDDIT_CACHE_TTL_HOURS` | `72` | how long a query's Reddit results are served before being refreshed |
+| `REDDIT_MAX_RESULTS` | `20` | threads fetched per query |
 
 ## Reliability notes
 
@@ -323,6 +310,18 @@ overviews, or to any script that speaks the `stream-json` format for testing.
 No SearXNG handy? `node app/test/stub-searxng.mjs` serves canned results on
 `:9999`; point `SEARXNG_URL` at it. `npm test` runs the unit tests.
 
+For Reddit results too, build and run the worker and point the app at it:
+
+```bash
+docker build -t boogle-reddit:local reddit
+docker run -d --name reddit-dev --init -p 127.0.0.1:8898:8080 boogle-reddit:local
+# then add REDDIT_WORKER_URL=http://127.0.0.1:8898 to the app's environment
+```
+
+`curl 'http://127.0.0.1:8898/results?q=rust+async'` shows a query's state
+(`queued`, then `hit` a few seconds later) and `docker logs reddit-dev` one
+line per search.
+
 ## Search quality: how results are ranked
 
 The app shows SearXNG's merged list, re-sorted once. SearXNG asks every
@@ -354,7 +353,11 @@ results page and the overview's source picker see the reranked list.
   rapid queries, after which SearXNG benches it; `suspended_times` in
   `searxng/settings.yml` is shortened so it comes back within minutes rather
   than an hour. **google cse** is a second Google-derived list, so pages on
-  both get the agreement bonus.
+  both get the agreement bonus; it runs on the Programmable Search ID that
+  every SearXNG install shares, so Google throttles it for everyone at once,
+  and whole-web engines of that kind end on 1 January 2027. **google
+  images** (google.com's own image results, which upstream ships off) feeds
+  the image tab instead of the shared-ID `google cse images`.
 - **brave** is the closest independent index to Google (about half of its
   top ten overlaps). **bing** is independent too. **yahoo** returns Bing's
   list (98% overlap) and is left off. **yandex** is independent and overlaps
@@ -363,14 +366,45 @@ results page and the overview's source picker see the reranked list.
 - **startpage** switched to Bing's index and SearXNG's parser currently
   returns nothing from it, so it is off. **duckduckgo**, **qwant** and
   **mojeek** answer server requests with a CAPTCHA or access-denied page.
-- **reddit** adds threads Google would surface, at low weight: through the
-  official API with your own credentials (`REDDIT_CLIENT_ID` and secret), or
-  the PullPush mirror, which rate-limits, without them. **stackoverflow** is
+- **reddit** inside SearXNG is the PullPush mirror, which rate-limits bursts;
+  the Reddit worker (next section) is the source that actually delivers
+  threads, merged in at the same low weight. **stackoverflow** is
   off: the Stack Exchange API allows 300 anonymous requests a day per IP, so
   the engine spent most of its time benched, and Google lists the same
   threads.
 - The `hostnames` plugin sinks pinterest, facebook and quora to the end of
   the page; add your own patterns there to demote or boost sites.
+
+### Reddit through a headless browser
+
+reddit.com answers server-side requests with HTTP 403, even from a home IP,
+its official API wants per-user app credentials, and the archive mirrors
+rate-limit. A real browser gets through, but a browser search takes seconds,
+so it is kept out of the request path. The `reddit` container
+(`reddit/worker.mjs`, on Playwright's Chromium image) works like this:
+
+- The app asks it for every first-page web search: `GET /results?q=…`. The
+  worker answers from its on-disk cache at once. A query it has not seen goes
+  on a queue, so the **first search for something is thinner and the repeats
+  are full**; entries older than `REDDIT_CACHE_TTL_HOURS` are served stale
+  and refreshed in the background.
+- One headless Chromium with a persistent profile (cookies survive restarts)
+  works the queue, one query every `REDDIT_MIN_INTERVAL_MS` plus jitter, and
+  only for queries a person actually ran. It tries Reddit's search JSON with
+  the browser's cookies first (scores, comment counts, thumbnails), and reads
+  the rendered search page if that is refused. A 403 or 429 pauses it for a
+  minute, doubling up to 30 minutes, without dropping the queue.
+- `app/src/reddit.ts` folds the threads into SearXNG's scored list the way
+  SearXNG would have scored an engine called `reddit`: a thread Google or
+  Brave already listed gets the agreement bonus, a new one scores like a
+  single-engine result at that position (`REDDIT_WEIGHT` ÷ position), and
+  the per-host cap keeps all but two Reddit threads at the end of the page.
+- The Settings page shows the worker's cache size, queue length and whether
+  Reddit has it paused; `/api/health` carries the same under `reddit`. The
+  worker's log has one line per search.
+
+It costs about 400 MB of RAM while Chromium is up. To run without it, remove
+the `reddit` service and set `REDDIT_WORKER_URL` to an empty value.
 
 ### Measuring a change
 
@@ -404,9 +438,9 @@ actually search for.
 - **Bangs**: edit the table in `app/src/bangs.ts`.
 - **Engines**: the `engines:` block in `searxng/settings.yml` is tuned for
   Google-like results: Google weighted highest, then Google CSE, Brave and
-  Bing, plus Reddit in web results; translators, icon
-  libraries, stock photo sites and broken video engines are off; every engine
-  is capped at 5 s. Flip `disabled` on any entry to change the mix, then
+  Bing; Google's own image results rather than the shared-ID Programmable
+  Search ones; translators, icon libraries, stock photo sites and broken
+  video engines are off; every engine is capped at 5 s. Flip `disabled` on any entry to change the mix, then
   measure it with the eval script (see "Search quality" above); SearXNG's
   defaults apply to everything unlisted.
 - **DuckDuckGo and Startpage** are off on purpose: DDG answers every
@@ -415,11 +449,12 @@ actually search for.
   SearXNG upstream periodically repairs engines; to retry one after pulling a
   newer image, set `disabled: false` and check `npm run eval -- engines`.
 - **Reddit** blocks direct server requests (403, then 429 on its RSS feeds),
-  and SearXNG dropped its Reddit engine. The `reddit` entry therefore queries
-  the PullPush archive API, a public mirror of Reddit posts ranked by score.
-  For the best Reddit results, create a free Google Programmable Search Engine
-  limited to reddit.com and enable the commented `reddit via google` entry
-  with its ID.
+  and SearXNG dropped its Reddit engine. The `reddit` entry in
+  `searxng/settings.yml` queries the PullPush archive API, a public mirror
+  of Reddit posts ranked by score; the Reddit worker (see "Search quality")
+  is the source that actually delivers threads. Reddit's official API needs
+  app credentials per user and Google's Programmable Search Engines are now
+  capped at 50 sites, so neither is wired in.
 - **Wikidata infobox**: `searxng/Dockerfile` builds the upstream image with a
   one-line patch adding Wikidata's `mul` language to the label fallback chain.
   Without it, entities whose name has moved to the language-independent label

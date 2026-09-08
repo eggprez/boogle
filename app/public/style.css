@@ -634,6 +634,7 @@ body.lb-open { overflow: hidden; }
 .status dd { margin: 0; }
 .ok-dot, .bad-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
 .bad-dot { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 20%, transparent); }
+.warn-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; background: #d97706; box-shadow: 0 0 0 3px color-mix(in srgb, #d97706 20%, transparent); }
 .keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 16px; font-size: 0.8438rem; color: var(--fg-2); }
 .keys kbd { font-size: 0.75rem; }
 .bangs { display: flex; flex-wrap: wrap; gap: 8px; }

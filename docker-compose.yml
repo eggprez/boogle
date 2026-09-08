@@ -3,8 +3,8 @@
 #   cp .env.example .env      # then edit
 #   docker compose up -d --build
 #
-# Only the boogle service is published (on 127.0.0.1 by default). SearXNG sits
-# on the private network and is reachable only from boogle.
+# Only the boogle service is published (on 127.0.0.1 by default). SearXNG and
+# the Reddit worker sit on the private network, reachable only from boogle.
 
 services:
   searxng:
@@ -21,12 +21,28 @@ services:
       - SEARXNG_SECRET=${SEARXNG_SECRET:?set SEARXNG_SECRET in .env (openssl rand -hex 32)}
       - SEARXNG_LIMITER=false
       - SEARXNG_PUBLIC_INSTANCE=false
-      - GOOGLE_CSE_ID=${GOOGLE_CSE_ID:-}
-      - GOOGLE_SITES_CSE_ID=${GOOGLE_SITES_CSE_ID:-}
-      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID:-}
-      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET:-}
     cap_drop: [ALL]
     cap_add: [CHOWN, SETGID, SETUID]
+    logging:
+      driver: json-file
+      options: { max-size: "1m", max-file: "1" }
+
+  # Headless browser that backfills Reddit results for queries people ran
+  # (reddit/worker.mjs). Optional: remove it and REDDIT_WORKER_URL below to
+  # go without. ~400 MB of RAM while Chromium is up.
+  reddit:
+    build: ./reddit
+    image: boogle-reddit:local
+    container_name: boogle-reddit
+    restart: unless-stopped
+    init: true                 # reap Chromium's helper processes
+    networks: [boogle]
+    environment:
+      - REDDIT_MIN_INTERVAL_MS=${REDDIT_MIN_INTERVAL_MS:-5000}
+      - REDDIT_CACHE_TTL_HOURS=${REDDIT_CACHE_TTL_HOURS:-72}
+    volumes:
+      - boogle-reddit:/data
+    cap_drop: [ALL]
     logging:
       driver: json-file
       options: { max-size: "1m", max-file: "1" }
@@ -45,6 +61,8 @@ services:
       - PUBLIC_URL=${PUBLIC_URL:-http://localhost:8081}
       - ACCENT_COLOR=${ACCENT_COLOR:-#6d28d9}
       - SEARXNG_URL=http://searxng:8080
+      - REDDIT_WORKER_URL=${REDDIT_WORKER_URL-http://reddit:8080}
+      - REDDIT_WEIGHT=${REDDIT_WEIGHT:-0.8}
       - AUTH_MODE=${AUTH_MODE:-proxy}
       - AUTH_USER_HEADER=${AUTH_USER_HEADER:-Remote-User}
       - AUTH_PROXY_SECRET=${AUTH_PROXY_SECRET:-}
@@ -68,3 +86,4 @@ networks:
 volumes:
   boogle-data:
   boogle-claude-home:
+  boogle-reddit:

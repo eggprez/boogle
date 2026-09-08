@@ -23,14 +23,4 @@ RUN f=/usr/local/searxng/searx/wikidata_properties.py \
 # local docker-compose.yml does, still overrides it.
 RUN mkdir -p /etc/searxng && chown searxng:searxng /etc/searxng
 COPY --chown=searxng:searxng settings.yml /etc/searxng/settings.yml
-
-# Reddit through the official API (needs your own app credentials; see
-# engines/reddit_oauth.py and the README).
-COPY --chown=searxng:searxng engines/reddit_oauth.py /usr/local/searxng/searx/engines/reddit_oauth.py
-
-# Fill GOOGLE_CSE_ID / REDDIT_CLIENT_* from the environment into settings.yml
-# at start, then run SearXNG's own entrypoint.
-COPY entrypoint.sh /usr/local/searxng/boogle-entrypoint.sh
-RUN chmod 755 /usr/local/searxng/boogle-entrypoint.sh
 USER searxng
-ENTRYPOINT ["/usr/local/searxng/boogle-entrypoint.sh"]

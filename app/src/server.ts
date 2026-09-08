@@ -10,6 +10,7 @@ import { config } from './config.js';
 import { getFavicon, validHost } from './favicons.js';
 import { generateFollowup, generateOverview, type OverviewEvent } from './overview/index.js';
 import { claudeVersion, type FollowupTurn } from './overview/claude.js';
+import { redditHealth } from './reddit.js';
 import { autocomplete, parseTimeRange, ping, search, TABS, type SearxResponse, type Tab } from './searxng.js';
 import { loadSettings, parseMode, sanitize, saveSettings } from './settings.js';
 import { e } from './views/html.js';
@@ -30,9 +31,9 @@ app.get('/favicon.ico', (c) => c.redirect('/static/favicon.svg'));
 app.get('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /\n'));
 
 app.get('/api/health', async (c) => {
-  const [searxng, claude, cache] = await Promise.all([ping(), claudeVersion(), cacheStats()]);
+  const [searxng, claude, cache, reddit] = await Promise.all([ping(), claudeVersion(), cacheStats(), redditHealth()]);
   const ok = searxng;
-  return c.json({ ok, searxng, claude, cache, site: config.siteName }, ok ? 200 : 503);
+  return c.json({ ok, searxng, claude, cache, reddit, site: config.siteName }, ok ? 200 : 503);
 });
 
 app.get('/opensearch.xml', (c) => {
@@ -181,7 +182,7 @@ app.post('/api/followup', async (c) => {
 app.get('/settings', async (c) => {
   const user = c.get('user');
   const settings = await loadSettings(user);
-  const [searxng, claude, cache] = await Promise.all([ping(), claudeVersion(), cacheStats()]);
+  const [searxng, claude, cache, reddit] = await Promise.all([ping(), claudeVersion(), cacheStats(), redditHealth()]);
   const cleared = c.req.query('cleared');
   return c.html(
     settingsPage({
@@ -189,7 +190,7 @@ app.get('/settings', async (c) => {
       user,
       saved: c.req.query('saved') === '1',
       cleared: cleared === undefined ? undefined : Number(cleared),
-      health: { searxng, claude, cacheEntries: cache.entries, cacheBytes: cache.bytes },
+      health: { searxng, claude, cacheEntries: cache.entries, cacheBytes: cache.bytes, reddit },
     }),
   );
 });

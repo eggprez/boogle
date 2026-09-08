@@ -1,8 +1,9 @@
-# Tests the app, then builds both container images and publishes them to
+# Tests the app, then builds the container images and publishes them to
 # GitHub's registry (ghcr.io) so a Docker host (e.g. TrueNAS "Install via
 # YAML") can pull them ready-made:
 #   ghcr.io/<owner>/boogle:latest          the web app + Claude Code CLI
 #   ghcr.io/<owner>/boogle-searxng:latest  upstream SearXNG + Wikidata patch + settings.yml
+#   ghcr.io/<owner>/boogle-reddit:latest   Playwright + the Reddit worker
 #
 # The image build only runs when the unit tests and the container smoke test
 # pass, so the weekly rebuild can never publish a broken image.
@@ -36,6 +37,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - run: node --check ../reddit/worker.mjs
 
   smoke:
     # Build the app image and drive it against a stub SearXNG: health must be
@@ -93,6 +95,8 @@ jobs:
             context: ./app
           - name: boogle-searxng
             context: ./searxng
+          - name: boogle-reddit
+            context: ./reddit
     steps:
       - uses: actions/checkout@v7
 

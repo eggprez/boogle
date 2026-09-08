@@ -1,0 +1,13 @@
+{
+  "name": "boogle-reddit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Boogle's Reddit worker: a headless browser that backfills Reddit results for queries people actually ran",
+  "type": "module",
+  "scripts": {
+    "start": "node worker.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

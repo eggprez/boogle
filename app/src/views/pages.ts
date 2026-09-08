@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { listBangs } from '../bangs.js';
 import { MODELS, type OverviewMode, type Settings } from '../settings.js';
+import type { RedditHealth } from '../reddit.js';
 import { TABS, TIME_RANGES, type SearxAnswer, type SearxInfobox, type SearxResponse, type SearxResult, type Tab, type TimeRange } from '../searxng.js';
 import { displayUrl, e, fmtDate, hostHue, hostOf, icons, safeUrl } from './html.js';
 import { layout, logo, searchForm } from './layout.js';
@@ -292,7 +293,7 @@ export function settingsPage(opts: {
   settings: Settings;
   saved?: boolean;
   cleared?: number;
-  health: { searxng: boolean; claude: string | null; cacheEntries: number; cacheBytes: number };
+  health: { searxng: boolean; claude: string | null; cacheEntries: number; cacheBytes: number; reddit?: RedditHealth | null };
   user: string;
 }): string {
   const s = opts.settings;
@@ -382,6 +383,7 @@ export function settingsPage(opts: {
       <dt>SearXNG</dt><dd>${opts.health.searxng ? '<span class="ok-dot"></span> reachable' : '<span class="bad-dot"></span> not reachable at ' + e(config.searxngUrl)}</dd>
       <dt>Claude CLI</dt><dd>${opts.health.claude ? `<span class="ok-dot"></span> ${e(opts.health.claude)}` : '<span class="bad-dot"></span> not found (is it installed in the image?)'}</dd>
       <dt>Overview cache</dt><dd>${opts.health.cacheEntries} entries, ${(opts.health.cacheBytes / 1024).toFixed(0)} KB, kept ${Math.round(config.cacheTtlMs / 3_600_000 / 24)} days</dd>
+      ${opts.health.reddit === null || opts.health.reddit === undefined ? '' : `<dt>Reddit worker</dt><dd>${redditStatus(opts.health.reddit)}</dd>`}
       <dt>Public URL</dt><dd>${e(config.publicUrl)}</dd>
     </dl>
     <form method="post" action="/settings/clear-cache" class="inline-form">
@@ -418,4 +420,12 @@ export function settingsPage(opts: {
 
 function cap(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function redditStatus(h: RedditHealth): string {
+  if (!h.ok) return `<span class="bad-dot"></span> ${h.browser === 'error' ? 'browser failed to start' : 'not reachable at ' + e(config.redditWorkerUrl)}`;
+  const bits = [`${h.cached ?? 0} queries cached`, `${h.queue ?? 0} queued`];
+  if (h.browser && h.browser !== 'ready') bits.push(`browser ${e(h.browser)}`);
+  if (h.blockedForSeconds) bits.push(`paused by Reddit for ${Math.ceil(h.blockedForSeconds / 60)} min`);
+  return `<span class="${h.blockedForSeconds ? 'warn-dot' : 'ok-dot'}"></span> ${bits.join(', ')}`;
 }

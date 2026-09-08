@@ -19,6 +19,10 @@ export const config = {
   port: num('PORT', 8080),
 
   searxngUrl: str('SEARXNG_URL', 'http://searxng:8080').replace(/\/+$/, ''),
+  // Reddit worker (reddit/worker.mjs); empty = no Reddit backfill.
+  redditWorkerUrl: str('REDDIT_WORKER_URL', '').replace(/\/+$/, ''),
+  // Engine weight Reddit threads get when merged into SearXNG's scores.
+  redditWeight: num('REDDIT_WEIGHT', 0.8),
 
   // 'proxy' trusts the user header set by TinyAuth/Authelia/etc.
   // 'none' treats every request as the same local user (LAN-only use / dev).

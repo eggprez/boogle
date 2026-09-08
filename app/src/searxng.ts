@@ -1,5 +1,6 @@
 import { config } from './config.js';
 import { rankResults } from './rank.js';
+import { lookupReddit, mergeReddit } from './reddit.js';
 
 export type Tab = 'web' | 'images' | 'news' | 'videos';
 export const TABS: Tab[] = ['web', 'images', 'news', 'videos'];
@@ -77,8 +78,11 @@ export interface SearchOptions {
 
 // Short-lived memo so the results page and the overview SSE stream (which
 // starts a moment later) share one SearXNG request.
-const memo = new Map<string, { at: number; value: Promise<SearxResponse> }>();
+const memo = new Map<string, { at: number; ttl: number; value: Promise<SearxResponse> }>();
 const MEMO_MS = 5 * 60 * 1000;
+// While the Reddit worker is still fetching a query, keep the memo short so
+// the next search for it picks the threads up rather than the thin copy.
+const MEMO_PENDING_REDDIT_MS = 20 * 1000;
 
 // Two attempts: a quick one, then a more patient one. SearXNG occasionally
 // stalls on a slow upstream engine; a retry usually comes back in a second.
@@ -89,7 +93,7 @@ export function search(q: string, tab: Tab, page: number, opts: SearchOptions): 
   const key = JSON.stringify([q, tab, page, rest]);
   const now = Date.now();
   const hit = memo.get(key);
-  if (hit && !fresh && now - hit.at < MEMO_MS) return hit.value;
+  if (hit && !fresh && now - hit.at < hit.ttl) return hit.value;
 
   const params = new URLSearchParams({
     q,
@@ -101,11 +105,21 @@ export function search(q: string, tab: Tab, page: number, opts: SearchOptions): 
   });
   if (opts.timeRange) params.set('time_range', opts.timeRange);
 
-  const value = (async () => {
+  // Reddit backfill runs alongside the SearXNG request (first web page only);
+  // it answers from the worker's cache or not at all.
+  const reddit = tab === 'web' && page === 1 ? lookupReddit(q, opts.timeRange) : null;
+
+  const entry = { at: now, ttl: MEMO_MS, value: undefined as unknown as Promise<SearxResponse> };
+  entry.value = (async () => {
     let lastErr: Error | null = null;
     for (const timeout of ATTEMPT_TIMEOUTS_MS) {
       try {
         const data = await fetchSearch(params, timeout);
+        if (reddit) {
+          const r = await reddit;
+          data.results = mergeReddit(data.results, r.results);
+          if (r.status === 'queued') entry.ttl = MEMO_PENDING_REDDIT_MS;
+        }
         data.results = rankResults(data.results, tab);
         return data;
       } catch (err) {
@@ -115,12 +129,12 @@ export function search(q: string, tab: Tab, page: number, opts: SearchOptions): 
     }
     throw lastErr ?? new Error('SearXNG request failed');
   })();
-  memo.set(key, { at: now, value });
-  value.catch(() => memo.delete(key));
+  memo.set(key, entry);
+  entry.value.catch(() => memo.delete(key));
   if (memo.size > 200) {
-    for (const [k, v] of memo) if (now - v.at > MEMO_MS) memo.delete(k);
+    for (const [k, v] of memo) if (now - v.at > v.ttl) memo.delete(k);
   }
-  return value;
+  return entry.value;
 }
 
 async function fetchSearch(params: URLSearchParams, timeoutMs: number): Promise<SearxResponse> {
