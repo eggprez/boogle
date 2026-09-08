@@ -9,6 +9,18 @@ const CATEGORY: Record<Tab, string> = {
   videos: 'videos',
 };
 
+export type TimeRange = '' | 'day' | 'week' | 'month' | 'year';
+export const TIME_RANGES: { id: TimeRange; label: string }[] = [
+  { id: '', label: 'Any time' },
+  { id: 'day', label: 'Past day' },
+  { id: 'week', label: 'Past week' },
+  { id: 'month', label: 'Past month' },
+  { id: 'year', label: 'Past year' },
+];
+export function parseTimeRange(v: unknown): TimeRange {
+  return v === 'day' || v === 'week' || v === 'month' || v === 'year' ? v : '';
+}
+
 export interface SearxResult {
   url: string;
   title: string;
@@ -57,7 +69,9 @@ export interface SearxResponse {
 export interface SearchOptions {
   safesearch: 0 | 1 | 2;
   language: string;
-  timeRange?: '' | 'day' | 'week' | 'month' | 'year';
+  timeRange?: TimeRange;
+  /** bypass the short-lived memo (the user clicked "Retry") */
+  fresh?: boolean;
 }
 
 // Short-lived memo so the results page and the overview SSE stream (which
@@ -65,11 +79,16 @@ export interface SearchOptions {
 const memo = new Map<string, { at: number; value: Promise<SearxResponse> }>();
 const MEMO_MS = 5 * 60 * 1000;
 
+// Two attempts: a quick one, then a more patient one. SearXNG occasionally
+// stalls on a slow upstream engine; a retry usually comes back in a second.
+const ATTEMPT_TIMEOUTS_MS = [12_000, 18_000];
+
 export function search(q: string, tab: Tab, page: number, opts: SearchOptions): Promise<SearxResponse> {
-  const key = JSON.stringify([q, tab, page, opts]);
+  const { fresh, ...rest } = opts;
+  const key = JSON.stringify([q, tab, page, rest]);
   const now = Date.now();
   const hit = memo.get(key);
-  if (hit && now - hit.at < MEMO_MS) return hit.value;
+  if (hit && !fresh && now - hit.at < MEMO_MS) return hit.value;
 
   const params = new URLSearchParams({
     q,
@@ -82,21 +101,16 @@ export function search(q: string, tab: Tab, page: number, opts: SearchOptions): 
   if (opts.timeRange) params.set('time_range', opts.timeRange);
 
   const value = (async () => {
-    const res = await fetch(`${config.searxngUrl}/search?${params}`, {
-      // SearXNG's bot detection logs an error when no client IP header is
-      // present, even with the limiter off. We're the only client, so say so.
-      headers: { Accept: 'application/json', 'X-Forwarded-For': '127.0.0.1', 'X-Real-IP': '127.0.0.1' },
-      signal: AbortSignal.timeout(20000),
-    });
-    if (!res.ok) throw new Error(`SearXNG responded ${res.status} ${res.statusText}`);
-    const data = (await res.json()) as SearxResponse;
-    data.results ??= [];
-    data.suggestions ??= [];
-    data.answers ??= [];
-    data.infoboxes ??= [];
-    data.corrections ??= [];
-    data.unresponsive_engines ??= [];
-    return data;
+    let lastErr: Error | null = null;
+    for (const timeout of ATTEMPT_TIMEOUTS_MS) {
+      try {
+        return await fetchSearch(params, timeout);
+      } catch (err) {
+        lastErr = err as Error;
+        if (!isRetryable(lastErr)) break;
+      }
+    }
+    throw lastErr ?? new Error('SearXNG request failed');
   })();
   memo.set(key, { at: now, value });
   value.catch(() => memo.delete(key));
@@ -104,6 +118,34 @@ export function search(q: string, tab: Tab, page: number, opts: SearchOptions): 
     for (const [k, v] of memo) if (now - v.at > MEMO_MS) memo.delete(k);
   }
   return value;
+}
+
+async function fetchSearch(params: URLSearchParams, timeoutMs: number): Promise<SearxResponse> {
+  const res = await fetch(`${config.searxngUrl}/search?${params}`, {
+    // SearXNG's bot detection logs an error when no client IP header is
+    // present, even with the limiter off. We're the only client, so say so.
+    headers: { Accept: 'application/json', 'X-Forwarded-For': '127.0.0.1', 'X-Real-IP': '127.0.0.1' },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    const err = new Error(`SearXNG responded ${res.status} ${res.statusText}`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
+  const data = (await res.json()) as SearxResponse;
+  data.results ??= [];
+  data.suggestions ??= [];
+  data.answers ??= [];
+  data.infoboxes ??= [];
+  data.corrections ??= [];
+  data.unresponsive_engines ??= [];
+  return data;
+}
+
+function isRetryable(err: Error & { status?: number; name?: string }): boolean {
+  if (err.status !== undefined) return err.status >= 500 || err.status === 429;
+  // timeouts, connection resets, DNS hiccups
+  return true;
 }
 
 export async function autocomplete(q: string): Promise<string[]> {

@@ -1,15 +1,16 @@
 import { config } from '../config.js';
-import { cacheKey, deleteCached, getCached, putCached } from '../cache.js';
-import { search, type SearxResult } from '../searxng.js';
+import { cacheKey, deleteCached, getCached, putCached, type CachedOverview } from '../cache.js';
+import { search, type SearxResult, type TimeRange } from '../searxng.js';
 import type { Model, OverviewMode, Settings } from '../settings.js';
-import { runClaudeOverview, type OverviewSource } from './claude.js';
+import { PROMPT_VERSION, runClaudeOverview, splitRelated, type FollowupTurn, type OverviewSource } from './claude.js';
 import { fetchReadable } from './pages.js';
+import { hostOf, pickSources } from './sources.js';
 
 export type OverviewEvent =
   | { type: 'status'; stage: 'searching' | 'reading' | 'writing'; detail?: string }
   | { type: 'sources'; sources: PublicSource[] }
   | { type: 'delta'; text: string }
-  | { type: 'done'; cached: boolean; model: Model; mode: OverviewMode; createdAt: number; costUsd?: number }
+  | { type: 'done'; cached: boolean; model: Model; mode: OverviewMode; createdAt: number; costUsd?: number; related?: string[] }
   | { type: 'error'; message: string };
 
 export interface PublicSource {
@@ -17,7 +18,10 @@ export interface PublicSource {
   title: string;
   url: string;
   host: string;
+  deep?: boolean;
 }
+
+export { hostOf };
 
 // A subscription has a usage budget; never let a burst of tabs fan out into
 // many simultaneous Claude processes.
@@ -38,26 +42,12 @@ async function acquire(signal: AbortSignal): Promise<() => void> {
   };
 }
 
-export function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return url;
-  }
-}
-
-function pickSources(results: SearxResult[], max: number): SearxResult[] {
-  const seen = new Set<string>();
-  const out: SearxResult[] = [];
-  for (const r of results) {
-    if (!r.url || !/^https?:/i.test(r.url)) continue;
-    const key = r.url.replace(/[#?].*$/, '').replace(/\/$/, '');
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(r);
-    if (out.length >= max) break;
-  }
-  return out;
+/**
+ * Cache key for an overview. Includes the prompt version so a prompt change
+ * never serves an overview written under the old prompt.
+ */
+export function overviewKey(query: string, mode: OverviewMode, model: Model, language: string, timeRange: TimeRange = ''): string {
+  return cacheKey(['v2', PROMPT_VERSION, query.trim().toLowerCase(), mode, model, language, timeRange]);
 }
 
 export async function* generateOverview(opts: {
@@ -66,10 +56,12 @@ export async function* generateOverview(opts: {
   mode: OverviewMode;
   refresh: boolean;
   signal: AbortSignal;
+  timeRange?: TimeRange;
 }): AsyncGenerator<OverviewEvent> {
   const { query, settings, mode, signal } = opts;
+  const timeRange = opts.timeRange ?? '';
   const model = settings.model;
-  const key = cacheKey(['v1', query.trim().toLowerCase(), mode, model, settings.language]);
+  const key = overviewKey(query, mode, model, settings.language, timeRange);
 
   if (opts.refresh) await deleteCached(key);
   else {
@@ -77,7 +69,7 @@ export async function* generateOverview(opts: {
     if (hit) {
       yield { type: 'sources', sources: hit.sources };
       yield { type: 'delta', text: hit.text };
-      yield { type: 'done', cached: true, model: hit.model as Model, mode: hit.mode as OverviewMode, createdAt: hit.createdAt };
+      yield { type: 'done', cached: true, model: hit.model as Model, mode: hit.mode as OverviewMode, createdAt: hit.createdAt, related: hit.related ?? [] };
       return;
     }
   }
@@ -85,7 +77,7 @@ export async function* generateOverview(opts: {
   yield { type: 'status', stage: 'searching' };
   let results: SearxResult[];
   try {
-    const res = await search(query, 'web', 1, { safesearch: settings.safesearch, language: settings.language });
+    const res = await search(query, 'web', 1, { safesearch: settings.safesearch, language: settings.language, timeRange });
     results = res.results;
   } catch (err) {
     yield { type: 'error', message: `Search failed: ${(err as Error).message}` };
@@ -94,7 +86,7 @@ export async function* generateOverview(opts: {
   if (signal.aborted) return;
 
   const deep = mode === 'deep';
-  const picked = pickSources(results, deep ? Math.max(config.deepReadPages * 2, 8) : config.snippetSources);
+  const picked = pickSources(results, deep ? Math.max(config.deepReadPages * 2, 8) : config.snippetSources, { deep });
   if (!picked.length) {
     yield { type: 'error', message: 'No results to summarize.' };
     return;
@@ -124,7 +116,7 @@ export async function* generateOverview(opts: {
   }
   sources.forEach((s, i) => (s.n = i + 1));
 
-  const publicSources: PublicSource[] = sources.map((s) => ({ n: s.n, title: s.title, url: s.url, host: s.host }));
+  const publicSources: PublicSource[] = sources.map((s) => ({ n: s.n, title: s.title, url: s.url, host: s.host, ...(s.deep ? { deep: true } : {}) }));
   yield { type: 'sources', sources: publicSources };
   yield { type: 'status', stage: 'writing', detail: model };
 
@@ -149,9 +141,57 @@ export async function* generateOverview(opts: {
       }
     }
     if (signal.aborted) return;
+    const { text, related } = splitRelated(finalText);
     const createdAt = Date.now();
-    await putCached({ key, query, mode, model, text: finalText, sources: publicSources, createdAt });
-    yield { type: 'done', cached: false, model, mode, createdAt, costUsd };
+    await putCached({ key, query, mode, model, text, sources: publicSources, sourceTexts: sources.map((s) => s.text), related, createdAt });
+    yield { type: 'done', cached: false, model, mode, createdAt, costUsd, related };
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Answer a follow-up question about an overview that is already cached,
+ * reusing its sources (with the text they contributed) as context.
+ */
+export async function* generateFollowup(opts: {
+  query: string;
+  question: string;
+  history: FollowupTurn[];
+  settings: Settings;
+  mode: OverviewMode;
+  timeRange?: TimeRange;
+  signal: AbortSignal;
+}): AsyncGenerator<OverviewEvent> {
+  const { query, question, settings, mode, signal } = opts;
+  const model = settings.model;
+  const key = overviewKey(query, mode, model, settings.language, opts.timeRange ?? '');
+  const hit: CachedOverview | null = await getCached(key);
+  if (!hit || !hit.sourceTexts) {
+    yield { type: 'error', message: 'The overview this follow-up refers to is no longer cached. Regenerate it first.' };
+    return;
+  }
+  const sources: OverviewSource[] = hit.sources.map((s, i) => ({ ...s, text: hit.sourceTexts?.[i] ?? '' }));
+  yield { type: 'sources', sources: hit.sources };
+  yield { type: 'status', stage: 'writing', detail: model };
+
+  let release: (() => void) | null = null;
+  try {
+    release = await acquire(signal);
+  } catch {
+    return;
+  }
+  try {
+    const followup = { question, overview: hit.text, history: opts.history.slice(-3) };
+    for await (const ev of runClaudeOverview({ query, sources, model, deep: mode === 'deep', signal, followup })) {
+      if (ev.type === 'delta') yield ev;
+      else if (ev.type === 'error') {
+        yield ev;
+        return;
+      } else if (ev.type === 'done') {
+        yield { type: 'done', cached: false, model, mode, createdAt: Date.now(), costUsd: ev.costUsd };
+      }
+    }
   } finally {
     release();
   }

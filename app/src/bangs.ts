@@ -35,7 +35,7 @@ export function resolveBang(query: string): string | null {
   if (!m) return null;
   const bang = BANGS[m[1].toLowerCase()];
   if (!bang) return null;
-  const rest = query.replace(m[0], ' ').trim();
+  const rest = query.replace(m[0], ' ').replace(/\s+/g, ' ').trim();
   if (!rest) return bang.home;
   return bang.url.replace('{q}', encodeURIComponent(rest));
 }

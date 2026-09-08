@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "boogle-stub",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "PORT=9999 node app/test/stub-searxng.mjs & cd app && AUTH_MODE=none SEARXNG_URL=http://127.0.0.1:9999 DATA_DIR=/tmp/boogle-dev-data PORT=8081 PUBLIC_URL=http://localhost:8081 CLAUDE_BIN=$PWD/test/fake-claude.mjs node dist/server.js"],
+      "port": 8081
+    }
+  ]
+}

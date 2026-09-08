@@ -1,15 +1,16 @@
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
-import { streamSSE } from 'hono/streaming';
+import { streamSSE, type SSEStreamingApi } from 'hono/streaming';
 import { mkdir } from 'node:fs/promises';
 import { auth, type AppEnv } from './auth.js';
 import { resolveBang } from './bangs.js';
 import { cacheStats, clearCache } from './cache.js';
 import { config } from './config.js';
-import { generateOverview } from './overview/index.js';
-import { claudeVersion } from './overview/claude.js';
-import { autocomplete, ping, search, TABS, type SearxResponse, type Tab } from './searxng.js';
+import { getFavicon, validHost } from './favicons.js';
+import { generateFollowup, generateOverview, type OverviewEvent } from './overview/index.js';
+import { claudeVersion, type FollowupTurn } from './overview/claude.js';
+import { autocomplete, parseTimeRange, ping, search, TABS, type SearxResponse, type Tab } from './searxng.js';
 import { loadSettings, sanitize, saveSettings, type OverviewMode } from './settings.js';
 import { e } from './views/html.js';
 import { homePage, resultsPage, settingsPage } from './views/pages.js';
@@ -60,6 +61,8 @@ app.get('/search', async (c) => {
   const tabParam = c.req.query('tab') as Tab | undefined;
   const tab: Tab = tabParam && TABS.includes(tabParam) ? tabParam : 'web';
   const page = Math.min(Math.max(parseInt(c.req.query('page') ?? '1', 10) || 1, 1), 50);
+  const timeRange = parseTimeRange(c.req.query('t'));
+  const fresh = c.req.query('retry') === '1';
   const settings = await loadSettings(c.get('user'));
   const modeParam = c.req.query('mode');
   const overviewMode: OverviewMode = modeParam === 'deep' || modeParam === 'snippets' ? modeParam : settings.overviewMode;
@@ -67,12 +70,12 @@ app.get('/search', async (c) => {
   let data: SearxResponse | null = null;
   let error: string | undefined;
   try {
-    data = await search(q, tab, page, { safesearch: settings.safesearch, language: settings.language });
+    data = await search(q, tab, page, { safesearch: settings.safesearch, language: settings.language, timeRange, fresh });
   } catch (err) {
     error = (err as Error).message;
     console.error('[search]', q, error);
   }
-  return c.html(resultsPage({ q, tab, page, data, error, settings, overviewMode }));
+  return c.html(resultsPage({ q, tab, page, timeRange, data, error, settings, overviewMode }));
 });
 
 app.get('/suggest', async (c) => {
@@ -91,6 +94,50 @@ app.get('/suggest', async (c) => {
   });
 });
 
+// Favicon proxy for result cards. Cached on disk; a miss is a 404 so the
+// client falls back to the lettered avatar.
+app.get('/favicon', async (c) => {
+  const host = validHost(c.req.query('host'));
+  if (!host) return c.body(null, 404);
+  const icon = await getFavicon(host);
+  if (!icon) return c.body(null, 404, { 'Cache-Control': 'private, max-age=86400' });
+  return c.body(new Uint8Array(icon.body), 200, {
+    'Content-Type': icon.type,
+    'Cache-Control': 'private, max-age=604800, immutable',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'",
+  });
+});
+
+/**
+ * Stream overview events as SSE. A comment line every 15 s keeps proxies and
+ * browsers from dropping a deep-mode stream that is quiet while pages load.
+ */
+function streamOverview(c: Parameters<typeof streamSSE>[0], run: (signal: AbortSignal) => AsyncGenerator<OverviewEvent>) {
+  c.header('X-Accel-Buffering', 'no'); // tell NGINX not to buffer the stream
+  c.header('Cache-Control', 'no-cache, no-transform');
+  return streamSSE(c, async (stream: SSEStreamingApi) => {
+    const ac = new AbortController();
+    stream.onAbort(() => ac.abort());
+    const ping = setInterval(() => {
+      if (!ac.signal.aborted) void stream.write(': ping\n\n').catch(() => ac.abort());
+    }, 15_000);
+    try {
+      for await (const ev of run(ac.signal)) {
+        if (ac.signal.aborted) break;
+        await stream.writeSSE({ event: ev.type, data: JSON.stringify(ev) });
+      }
+    } catch (err) {
+      console.error('[overview]', err);
+      if (!ac.signal.aborted) {
+        await stream.writeSSE({ event: 'error', data: JSON.stringify({ type: 'error', message: (err as Error).message }) });
+      }
+    } finally {
+      clearInterval(ping);
+    }
+  });
+}
+
 app.get('/api/overview', async (c) => {
   const q = (c.req.query('q') ?? '').trim().slice(0, 512);
   if (!q) return c.json({ error: 'missing q' }, 400);
@@ -99,25 +146,31 @@ app.get('/api/overview', async (c) => {
   const modeParam = c.req.query('mode');
   const mode: OverviewMode = modeParam === 'deep' || modeParam === 'snippets' ? modeParam : settings.overviewMode;
   const refresh = c.req.query('refresh') === '1';
+  const timeRange = parseTimeRange(c.req.query('t'));
+  return streamOverview(c, (signal) => generateOverview({ query: q, settings, mode, refresh, timeRange, signal }));
+});
 
-  c.header('X-Accel-Buffering', 'no'); // tell NGINX not to buffer the stream
-  c.header('Cache-Control', 'no-cache, no-transform');
-
-  return streamSSE(c, async (stream) => {
-    const ac = new AbortController();
-    stream.onAbort(() => ac.abort());
-    try {
-      for await (const ev of generateOverview({ query: q, settings, mode, refresh, signal: ac.signal })) {
-        if (ac.signal.aborted) break;
-        await stream.writeSSE({ event: ev.type, data: JSON.stringify(ev) });
-      }
-    } catch (err) {
-      console.error('[overview]', q, err);
-      if (!ac.signal.aborted) {
-        await stream.writeSSE({ event: 'error', data: JSON.stringify({ type: 'error', message: (err as Error).message }) });
-      }
-    }
-  });
+app.post('/api/followup', async (c) => {
+  let body: { q?: unknown; question?: unknown; mode?: unknown; t?: unknown; history?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'expected JSON' }, 400);
+  }
+  const q = String(body.q ?? '').trim().slice(0, 512);
+  const question = String(body.question ?? '').trim().slice(0, 500);
+  if (!q || !question) return c.json({ error: 'missing q or question' }, 400);
+  const settings = await loadSettings(c.get('user'));
+  if (!settings.overviewEnabled) return c.json({ error: 'overview disabled' }, 403);
+  const mode: OverviewMode = body.mode === 'deep' || body.mode === 'snippets' ? body.mode : settings.overviewMode;
+  const timeRange = parseTimeRange(body.t);
+  const history: FollowupTurn[] = Array.isArray(body.history)
+    ? body.history
+        .filter((h): h is FollowupTurn => !!h && typeof h === 'object' && typeof (h as FollowupTurn).question === 'string' && typeof (h as FollowupTurn).answer === 'string')
+        .map((h) => ({ question: h.question.slice(0, 500), answer: h.answer.slice(0, 4000) }))
+        .slice(-3)
+    : [];
+  return streamOverview(c, (signal) => generateFollowup({ query: q, question, history, settings, mode, timeRange, signal }));
 });
 
 app.get('/settings', async (c) => {
@@ -162,11 +215,15 @@ app.onError((err, c) => {
   return c.text('Something went wrong: ' + err.message, 500);
 });
 
-await mkdir(config.dataDir, { recursive: true }).catch(() => {});
-serve({ fetch: app.fetch, port: config.port, hostname: '0.0.0.0' }, (info) => {
-  console.log(`${config.siteName} listening on http://0.0.0.0:${info.port}`);
-  console.log(`  SearXNG:   ${config.searxngUrl}`);
-  console.log(`  Public:    ${config.publicUrl}`);
-  console.log(`  Auth mode: ${config.authMode}${config.authMode === 'proxy' ? ` (header ${config.authUserHeader})` : ''}`);
-  console.log(`  Data dir:  ${config.dataDir}`);
-});
+export { app };
+
+if (process.env.BOOGLE_NO_LISTEN !== '1') {
+  await mkdir(config.dataDir, { recursive: true }).catch(() => {});
+  serve({ fetch: app.fetch, port: config.port, hostname: '0.0.0.0' }, (info) => {
+    console.log(`${config.siteName} listening on http://0.0.0.0:${info.port}`);
+    console.log(`  SearXNG:   ${config.searxngUrl}`);
+    console.log(`  Public:    ${config.publicUrl}`);
+    console.log(`  Auth mode: ${config.authMode}${config.authMode === 'proxy' ? ` (header ${config.authUserHeader})` : ''}`);
+    console.log(`  Data dir:  ${config.dataDir}`);
+  });
+}

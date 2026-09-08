@@ -12,8 +12,18 @@ minus Google's AI Overview and plus one written by Claude.
   summarises the top 10 result snippets) or *Read the pages* (10–30 s, fetches
   and reads the top 5 pages, then answers with real detail). A "Read the pages"
   button on any overview upgrades that one query on demand.
+- **Follow-up questions**: an "Ask a follow-up" box under every overview
+  answers from the same sources, streamed the same way, without a new search.
+  Claude also ends each overview with three **"Search next"** suggestions.
 - **Model picker** (Haiku / Sonnet / Opus) and an **on-disk overview cache** so
-  repeat searches are instant and don't spend quota.
+  repeat searches are instant and don't spend quota. The cache key includes a
+  hash of the prompt, so editing the prompt never serves stale overviews.
+- **Time filter** (past day / week / month / year) on every tab, real
+  **favicons** on result cards (proxied and cached, never fetched by your
+  browser), an **image lightbox** with arrow-key browsing, and **inline video
+  playback** for results that offer an embed.
+- **Keyboard driven**: `/` focuses search, `j`/`k` move through results,
+  `Enter` opens, `o` opens in a new tab, `1`–`4` switch tabs, `Esc` clears.
 - **Bangs** (`!yt`, `!gh`, `!w`, `!r`, …) and an **OpenSearch descriptor** so
   you can make it your browser's default search engine with suggestions.
 - **Auth** is delegated to your existing TinyAuth + NGINX setup: the app trusts
@@ -34,11 +44,13 @@ docker-compose.yml     searxng + boogle services
 searxng/settings.yml   SearXNG config (JSON output on, limiter off, autocomplete on)
 app/                   the Boogle web app (Node 24 + TypeScript + Hono)
   Dockerfile           builds the app and installs @anthropic-ai/claude-code
-  src/server.ts        routes: /, /search, /api/overview (SSE), /suggest, /settings, /opensearch.xml
-  src/searxng.ts       SearXNG JSON API client
+  src/server.ts        routes: /, /search, /api/overview (SSE), /api/followup (SSE), /favicon, /suggest, /settings, /opensearch.xml
+  src/searxng.ts       SearXNG JSON API client (one retry, time-range filter, 5-minute memo)
+  src/favicons.ts      favicon proxy with on-disk cache
   src/overview/        overview pipeline: pick sources → (deep: fetch + Readability) → claude -p → cache
   src/views/           server-rendered HTML
-  public/              CSS, client JS (streaming + autocomplete + markdown), favicon
+  public/              CSS, client JS (streaming, follow-ups, keyboard nav, lightbox), markdown renderer, favicon
+  test/                Vitest unit tests + a stub SearXNG used by the CI smoke test
 ```
 
 ## Deploy on TrueNAS SCALE (prebuilt images, nothing to copy)
@@ -201,7 +213,7 @@ secret only NGINX knows.
 
 `/settings` (the gear icon) has: overview on/off, depth (snippets vs read the
 pages), model, safe search, language, open-in-new-tab, theme, a status panel,
-a cache-clear button, and the bang list. Settings are stored per user under
+a cache-clear button, the keyboard shortcuts, and the bang list. Settings are stored per user under
 `/data/settings/` in the `boogle-data` volume.
 
 ## Environment reference
@@ -222,6 +234,21 @@ a cache-clear button, and the bang list. Settings are stored per user under
 | `DEEP_READ_PAGES` | `5` | pages read in deep mode |
 | `DEEP_READ_CHARS_PER_PAGE` | `6000` | text cap per page in deep mode |
 | `SNIPPET_SOURCES` | `10` | results given to Claude in snippet mode |
+
+## Reliability notes
+
+- SearXNG is tried twice (12 s, then 18 s) before the page shows an error, and
+  the error and the "N engines didn't respond" banner both carry a **Retry**
+  link that bypasses the 5-minute result memo.
+- The overview stream sends a keep-alive comment every 15 s so NGINX and
+  browsers keep a quiet deep-mode connection open; if the connection still
+  drops, the client reconnects once by itself.
+- Sources for the overview are capped at two per site, prefer results that
+  more than one engine returned, and in deep mode skip hosts that never yield
+  readable text (YouTube, X, Pinterest, PDFs, …) so no fetches are wasted.
+- Every push runs the unit tests and a container smoke test (the app image
+  against `app/test/stub-searxng.mjs`) before the images are published, so the
+  weekly rebuild cannot ship a broken image to TrueNAS.
 
 ## How the overview call works
 
@@ -258,6 +285,9 @@ AUTH_MODE=none SEARXNG_URL=http://127.0.0.1:8888 DATA_DIR=/tmp/boogle-data \
 Set `CLAUDE_BIN` to a locally installed `claude` (logged in) to get real
 overviews, or to any script that speaks the `stream-json` format for testing.
 
+No SearXNG handy? `node app/test/stub-searxng.mjs` serves canned results on
+`:9999`; point `SEARXNG_URL` at it. `npm test` runs the unit tests.
+
 ## Customising
 
 - **Bangs**: edit the table in `app/src/bangs.ts`.
@@ -283,5 +313,8 @@ overviews, or to any script that speaks the `stream-json` format for testing.
   Without it, entities whose name has moved to the language-independent label
   (most of them now) show up as bare Q-ids. Rebuild with
   `docker compose build searxng` after pulling a new upstream image.
-- **Prompt**: `SYSTEM_PROMPT` in `app/src/overview/claude.ts`.
+- **Prompt**: `SYSTEM_PROMPT` in `app/src/overview/claude.ts`. Cached
+  overviews are keyed on a hash of it, so a change takes effect immediately.
+- **Overview source picking**: `app/src/overview/sources.ts` (per-host cap,
+  hosts skipped in deep mode).
 - **Look**: `app/public/style.css`; the accent is the `--accent` variable.

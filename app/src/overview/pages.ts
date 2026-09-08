@@ -113,7 +113,7 @@ async function readCapped(res: Response, cap: number): Promise<string> {
 
 // The overview fetches URLs chosen by search engines, so refuse anything that
 // could point back inside the Docker network or the LAN.
-function isPrivateHost(host: string): boolean {
+export function isPrivateHost(host: string): boolean {
   const h = host.toLowerCase();
   if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal') || !h.includes('.')) return true;
   const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);

@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { listBangs } from '../bangs.js';
 import { MODELS, type Settings } from '../settings.js';
-import { TABS, type SearxAnswer, type SearxInfobox, type SearxResponse, type SearxResult, type Tab } from '../searxng.js';
+import { TABS, TIME_RANGES, type SearxAnswer, type SearxInfobox, type SearxResponse, type SearxResult, type Tab, type TimeRange } from '../searxng.js';
 import { displayUrl, e, fmtDate, hostHue, hostOf, icons, safeUrl } from './html.js';
 import { layout, logo, searchForm } from './layout.js';
 
@@ -39,26 +39,39 @@ export function resultsPage(opts: {
   q: string;
   tab: Tab;
   page: number;
+  timeRange: TimeRange;
   data: SearxResponse | null;
   error?: string;
   settings: Settings;
   overviewMode: 'snippets' | 'deep';
 }): string {
-  const { q, tab, page, data, settings } = opts;
+  const { q, tab, page, data, settings, timeRange } = opts;
   const target = settings.openInNewTab ? ' target="_blank" rel="noopener"' : ' rel="noopener"';
   const showOverview = settings.overviewEnabled && tab === 'web' && page === 1 && !opts.error;
   const results = data?.results ?? [];
+  const t = timeRange ? `&t=${timeRange}` : '';
+  const link = (params: string) => `/search?q=${encodeURIComponent(q)}${params}`;
 
   const tabs = TABS.map(
-    (t) =>
-      `<a class="tab tab-${t}${t === tab ? ' active' : ''}" href="/search?q=${encodeURIComponent(q)}&tab=${t}">${TAB_ICON[t]}${TAB_LABEL[t]}</a>`,
+    (tb) => `<a class="tab tab-${tb}${tb === tab ? ' active' : ''}" href="${link(`&tab=${tb}${t}`)}">${TAB_ICON[tb]}${TAB_LABEL[tb]}</a>`,
   ).join('');
+  const filters = `<div class="filters" aria-label="Time range">${icons.clock}${TIME_RANGES.map(
+    (r) => `<a class="filter${r.id === timeRange ? ' active' : ''}" href="${link(`&tab=${tab}${r.id ? `&t=${r.id}` : ''}`)}">${r.label}</a>`,
+  ).join('')}</div>`;
+
+  const unresponsive = (data?.unresponsive_engines ?? []).map((x) => x[0]);
+  const retryHref = link(`&tab=${tab}${t}${page > 1 ? `&page=${page}` : ''}&retry=1`);
+  const engineNote = unresponsive.length
+    ? `<div class="notice warn engine-note"><span>${unresponsive.length} search engine${unresponsive.length > 1 ? 's' : ''} didn't respond (${e(unresponsive.join(', '))}); results may be thinner than usual.</span><a class="retry" href="${retryHref}">${icons.refresh} Retry</a></div>`
+    : '';
 
   let list = '';
   if (opts.error) {
-    list = `<div class="notice error"><strong>Search failed.</strong> ${e(opts.error)}</div>`;
+    list = `<div class="notice error"><span><strong>Search failed.</strong> ${e(opts.error)}</span><a class="retry" href="${retryHref}">${icons.refresh} Retry</a></div>`;
   } else if (!results.length) {
-    list = `<div class="notice"><strong>No results for “${e(q)}”.</strong> Try different words, or check that SearXNG's engines are responding.</div>`;
+    list = `<div class="notice"><span><strong>No results for “${e(q)}”${timeRange ? ' in this time range' : ''}.</strong> ${
+      unresponsive.length ? 'Some engines did not respond; try again in a moment.' : timeRange ? 'Try widening the time range.' : "Try different words, or check that SearXNG's engines are responding."
+    }</span><a class="retry" href="${timeRange ? link(`&tab=${tab}`) : retryHref}">${timeRange ? 'Any time' : `${icons.refresh} Retry`}</a></div>`;
   } else if (tab === 'images') {
     list = `<div class="img-grid">${results.map((r) => imageCard(r)).join('')}</div>`;
   } else if (tab === 'videos') {
@@ -73,7 +86,7 @@ export function resultsPage(opts: {
   const didYouMean = corrections.length
     ? `<p class="dym">Did you mean: ${corrections
         .slice(0, 3)
-        .map((c) => `<a href="/search?q=${encodeURIComponent(c)}&tab=${tab}">${e(c)}</a>`)
+        .map((c) => `<a href="/search?q=${encodeURIComponent(c)}&tab=${tab}${t}">${e(c)}</a>`)
         .join(', ')}</p>`
     : '';
 
@@ -97,9 +110,9 @@ export function resultsPage(opts: {
 
   const pager = results.length
     ? `<nav class="pager" aria-label="Pagination">
-      ${page > 1 ? `<a class="pg" href="/search?q=${encodeURIComponent(q)}&tab=${tab}&page=${page - 1}">‹ Previous</a>` : '<span></span>'}
+      ${page > 1 ? `<a class="pg" href="${link(`&tab=${tab}${t}&page=${page - 1}`)}">‹ Previous</a>` : '<span></span>'}
       <span class="pg-num">Page ${page}</span>
-      <a class="pg" href="/search?q=${encodeURIComponent(q)}&tab=${tab}&page=${page + 1}">Next ›</a>
+      <a class="pg" href="${link(`&tab=${tab}${t}&page=${page + 1}`)}">Next ›</a>
     </nav>`
     : '';
 
@@ -123,7 +136,7 @@ export function resultsPage(opts: {
   const aside = infobox && tab === 'web' ? infoboxCard(infobox, target) : '';
 
   const overview = showOverview
-    ? `<section class="overview" id="overview" data-q="${e(q)}" data-mode="${opts.overviewMode}" data-model="${e(settings.model)}">
+    ? `<section class="overview" id="overview" data-q="${e(q)}" data-mode="${opts.overviewMode}" data-model="${e(settings.model)}" data-t="${timeRange}">
   <div class="ov-head">
     <span class="ov-spark">${icons.sparkle}</span>
     <span class="ov-title">AI Overview</span>
@@ -138,12 +151,14 @@ export function resultsPage(opts: {
     <button type="button" class="ov-btn" data-action="deep"${opts.overviewMode === 'deep' ? ' hidden' : ''}>${icons.book} Read the pages</button>
     <span class="ov-note" id="ov-note"></span>
   </div>
+  <div class="ov-related" id="ov-related" hidden></div>
+  <div class="ov-followups" id="ov-followups"></div>
+  <form class="ov-ask" id="ov-ask" hidden autocomplete="off">
+    <span class="ov-ask-icon">${icons.sparkle}</span>
+    <input type="text" name="question" class="ov-ask-input" placeholder="Ask a follow-up about these results…" maxlength="500" aria-label="Ask a follow-up question">
+    <button type="submit" class="ov-ask-go" aria-label="Ask">${icons.arrowRight}</button>
+  </form>
 </section>`
-    : '';
-
-  const unresponsive = (data?.unresponsive_engines ?? []).map((x) => x[0]);
-  const engineNote = unresponsive.length
-    ? `<p class="engine-note" title="${e(unresponsive.join(', '))}">${unresponsive.length} engine${unresponsive.length > 1 ? 's' : ''} didn't respond</p>`
     : '';
 
   return layout({
@@ -156,17 +171,17 @@ export function resultsPage(opts: {
   ${searchForm({ q, tab, size: 'sm' })}
   <a class="iconbtn" href="/settings" title="Settings" aria-label="Settings">${icons.gear}</a>
 </header>
-<nav class="tabs" aria-label="Result types">${tabs}</nav>
-<main class="results-layout">
+<nav class="tabs" aria-label="Result types">${tabs}${filters}</nav>
+<main class="results-layout" data-tab="${tab}">
   <div class="main-col">
     ${didYouMean}
+    ${engineNote}
     ${shortAnswers}
     ${overview}
     ${longAnswers}
     ${list}
     ${relatedHtml}
     ${pager}
-    ${engineNote}
   </div>
   ${aside ? `<aside class="side-col">${aside}</aside>` : ''}
 </main>
@@ -176,7 +191,12 @@ export function resultsPage(opts: {
 
 function avatar(url: string): string {
   const h = hostOf(url);
-  return `<span class="r-avatar" style="--h:${hostHue(h)}" aria-hidden="true">${e(h.charAt(0).toUpperCase() || '•')}</span>`;
+  // The letter is the fallback; the proxied favicon sits on top and removes
+  // itself if the site has none.
+  const icon = /^[a-z0-9.-]+$/i.test(h) && h.includes('.')
+    ? `<img src="/favicon?host=${encodeURIComponent(h)}" alt="" loading="lazy" decoding="async" onerror="this.remove()">`
+    : '';
+  return `<span class="r-avatar" style="--h:${hostHue(h)}" aria-hidden="true">${e(h.charAt(0).toUpperCase() || '•')}${icon}</span>`;
 }
 
 function webResult(r: SearxResult, target: string): string {
@@ -207,8 +227,9 @@ function newsCard(r: SearxResult, target: string): string {
 function videoCard(r: SearxResult, target: string): string {
   const thumb = r.thumbnail || r.img_src;
   const meta = [hostOf(r.url), r.author, r.length, fmtDate(r.publishedDate)].filter(Boolean).map(e).join(' · ');
-  return `<article class="result video">
-  <a class="video-thumb" href="${safeUrl(r.url)}"${target}>
+  const embed = r.iframe_src && /^https:\/\//i.test(r.iframe_src) ? ` data-embed="${e(r.iframe_src)}"` : '';
+  return `<article class="result video"${embed}>
+  <a class="video-thumb" href="${safeUrl(r.url)}"${target}${embed ? ' title="Play here"' : ''}>
     ${thumb ? `<img src="${safeUrl(thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="video-empty"></span>`}
     <span class="video-play">${icons.play}</span>
   </a>
@@ -223,8 +244,8 @@ function videoCard(r: SearxResult, target: string): string {
 function imageCard(r: SearxResult): string {
   const thumb = r.thumbnail_src || r.thumbnail || r.img_src;
   if (!thumb) return '';
-  return `<a class="img-card" href="${safeUrl(r.url)}" target="_blank" rel="noopener" title="${e(r.title ?? '')}">
-  <img src="${safeUrl(thumb)}" alt="${e(r.title ?? '')}" loading="lazy" referrerpolicy="no-referrer" data-full="${safeUrl(r.img_src ?? '')}">
+  return `<a class="img-card" href="${safeUrl(r.url)}" target="_blank" rel="noopener" title="${e(r.title ?? '')}" data-full="${safeUrl(r.img_src ?? thumb)}" data-title="${e(r.title ?? '')}" data-host="${e(hostOf(r.url))}" data-res="${e(r.resolution ?? '')}">
+  <img src="${safeUrl(thumb)}" alt="${e(r.title ?? '')}" loading="lazy" referrerpolicy="no-referrer">
   <span class="img-cap"><span class="img-title">${e(r.title ?? '')}</span><span class="img-host">${e(hostOf(r.url))}${r.resolution ? ` · ${e(r.resolution)}` : ''}</span></span>
 </a>`;
 }
@@ -351,6 +372,18 @@ export function settingsPage(opts: {
     <h2>Add to your browser</h2>
     <p>Chrome and Firefox pick up the OpenSearch descriptor automatically. In <strong>Firefox</strong>, click the search icon in the address bar and choose “Add ${e(config.siteName)}”. In <strong>Chrome</strong>, open <code>chrome://settings/searchEngines</code> after visiting this site once and set it as default, or add it manually with:</p>
     <pre><code>${e(config.publicUrl)}/search?q=%s</code></pre>
+  </section>
+
+  <section class="settings-form">
+    <h2>Keyboard shortcuts</h2>
+    <div class="keys">
+      <span><kbd>/</kbd> focus the search box</span>
+      <span><kbd>j</kbd> / <kbd>k</kbd> next / previous result</span>
+      <span><kbd>Enter</kbd> open the highlighted result</span>
+      <span><kbd>o</kbd> open it in a new tab</span>
+      <span><kbd>1</kbd>–<kbd>4</kbd> All, Images, News, Videos</span>
+      <span><kbd>Esc</kbd> clear the highlight or close a preview</span>
+    </div>
   </section>
 
   <section class="settings-form">

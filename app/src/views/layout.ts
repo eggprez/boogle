@@ -24,6 +24,7 @@ export function layout(opts: {
 <link rel="search" type="application/opensearchdescription+xml" title="${e(config.siteName)}" href="/opensearch.xml">
 <link rel="stylesheet" href="/static/style.css">
 <style>:root{--accent:${e(config.accent)};}</style>
+<script src="/static/markdown.js" defer></script>
 <script src="/static/app.js" defer></script>
 </head>
 <body class="${e(opts.bodyClass ?? '')}">

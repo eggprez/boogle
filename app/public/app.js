@@ -1,12 +1,20 @@
-/* Boogle client: autocomplete, search box niceties, streaming AI overview. */
+/* Boogle client: autocomplete, search box niceties, streaming AI overview,
+ * follow-up questions, keyboard navigation, image lightbox, inline video. */
 (() => {
   'use strict';
 
+  const { renderMarkdown, esc } = window.BoogleMarkdown;
+
   const SEARCH_ICON =
     '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>';
+  const SPARK_ICON =
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M12 2c.4 3.9 2.1 6.6 6 7-3.9.4-5.6 3.1-6 7-.4-3.9-2.1-6.6-6-7 3.9-.4 5.6-3.1 6-7z"/></svg>';
+  const CLOSE_ICON =
+    '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+  const CHEV = (dir) =>
+    `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${dir < 0 ? 'M15 5l-7 7 7 7' : 'M9 5l7 7-7 7'}"/></svg>`;
 
-  const esc = (s) =>
-    String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const inField = () => /input|textarea|select/i.test(document.activeElement?.tagName || '') || document.activeElement?.isContentEditable;
 
   /* ------------------------------------------------------------ search box */
   for (const form of document.querySelectorAll('form.searchbox')) setupSearchBox(form);
@@ -104,18 +112,6 @@
     });
   }
 
-  // "/" focuses the search box like on GitHub.
-  document.addEventListener('keydown', (ev) => {
-    if (ev.key === '/' && !/input|textarea|select/i.test(document.activeElement?.tagName || '')) {
-      const input = document.querySelector('.sb-input');
-      if (input) {
-        ev.preventDefault();
-        input.focus();
-        input.select();
-      }
-    }
-  });
-
   /* ------------------------------------------------ home: recent searches */
   const RECENT_KEY = 'boogle.recent';
   const readRecent = () => {
@@ -165,6 +161,38 @@
     }
   }
 
+  /* ------------------------------------------------------- SSE over fetch */
+  // EventSource only does GET; follow-ups POST a JSON body, so parse the
+  // stream by hand. Yields {event, data} objects.
+  async function* sseFetch(url, init, signal) {
+    const res = await fetch(url, { ...init, signal });
+    if (!res.ok || !res.body) {
+      let msg = `HTTP ${res.status}`;
+      try { msg = (await res.json()).error || msg; } catch { /* keep */ }
+      throw new Error(msg);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        let event = 'message';
+        const data = [];
+        for (const line of chunk.split('\n')) {
+          if (line.startsWith('event:')) event = line.slice(6).trim();
+          else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+        }
+        if (data.length) yield { event, data: data.join('\n') };
+      }
+    }
+  }
+
   /* --------------------------------------------------------- AI overview */
   const ov = document.getElementById('overview');
   if (ov) setupOverview(ov);
@@ -176,12 +204,20 @@
     const srcEl = document.getElementById('ov-sources');
     const actions = document.getElementById('ov-actions');
     const note = document.getElementById('ov-note');
+    const relatedEl = document.getElementById('ov-related');
+    const followupsEl = document.getElementById('ov-followups');
+    const askForm = document.getElementById('ov-ask');
+    const askInput = askForm.querySelector('.ov-ask-input');
     const q = root.dataset.q;
+    const t = root.dataset.t || '';
     let mode = root.dataset.mode;
     let es = null;
     let text = '';
     let sources = [];
     let raf = 0;
+    let retried = false;
+    let ready = false;
+    const history = []; // follow-up turns, sent back as context for the next one
 
     const paint = (streaming) => {
       raf = 0;
@@ -203,21 +239,34 @@
         .join('');
       srcEl.hidden = false;
     };
+    const renderRelated = (list) => {
+      if (!list || !list.length) return (relatedEl.hidden = true);
+      relatedEl.innerHTML =
+        `<span class="ov-related-label">${SPARK_ICON} Search next</span>` +
+        list.map((s) => `<a class="chip" href="/search?q=${encodeURIComponent(s)}&tab=web">${SEARCH_ICON}<span></span></a>`).join('');
+      relatedEl.querySelectorAll('.chip span').forEach((el, i) => (el.textContent = list[i]));
+      relatedEl.hidden = false;
+    };
 
     function start(refresh) {
       es?.close();
       text = '';
       sources = [];
+      ready = false;
       root.classList.add('busy');
       root.classList.remove('error');
       body.innerHTML = '<div class="ov-skeleton"><span></span><span></span><span></span></div>';
       status.textContent = 'Searching…';
       srcEl.hidden = true;
       actions.hidden = true;
+      relatedEl.hidden = true;
+      askForm.hidden = true;
+      followupsEl.innerHTML = '';
+      history.length = 0;
       note.textContent = '';
       setBadges([{ text: mode === 'deep' ? 'Reading pages' : 'Snippets', muted: true }]);
 
-      const url = `/api/overview?q=${encodeURIComponent(q)}&mode=${encodeURIComponent(mode)}${refresh ? '&refresh=1' : ''}`;
+      const url = `/api/overview?q=${encodeURIComponent(q)}&mode=${encodeURIComponent(mode)}${t ? `&t=${t}` : ''}${refresh ? '&refresh=1' : ''}`;
       es = new EventSource(url);
 
       es.addEventListener('status', (ev) => {
@@ -252,6 +301,9 @@
         ]);
         note.textContent = d.cached ? `Cached ${relTime(d.createdAt)}` : 'Just now';
         actions.hidden = false;
+        renderRelated(d.related);
+        askForm.hidden = false;
+        ready = true;
         const deepBtn = actions.querySelector('[data-action="deep"]');
         if (deepBtn) deepBtn.hidden = d.mode === 'deep';
       });
@@ -260,6 +312,16 @@
         es.close();
         cancelAnimationFrame(raf);
         raf = 0;
+        const transport = !ev.data;
+        // A dropped connection (proxy hiccup, sleeping laptop) gets one
+        // automatic retry; the server either has the overview cached by now
+        // or regenerates it.
+        if (transport && !retried) {
+          retried = true;
+          status.textContent = 'Reconnecting…';
+          setTimeout(() => start(false), 1500);
+          return;
+        }
         root.classList.remove('busy');
         root.classList.add('error');
         let message = 'Connection to the overview stream was lost.';
@@ -280,10 +342,72 @@
     actions.addEventListener('click', (ev) => {
       const btn = ev.target.closest('button[data-action]');
       if (!btn) return;
+      retried = false;
       if (btn.dataset.action === 'refresh') start(true);
       if (btn.dataset.action === 'deep') {
         mode = 'deep';
         start(false);
+      }
+    });
+
+    /* follow-up questions */
+    let asking = false;
+    askForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const question = askInput.value.trim();
+      if (!question || asking || !ready) return;
+      asking = true;
+      askInput.value = '';
+      askForm.classList.add('busy');
+
+      const block = document.createElement('div');
+      block.className = 'ov-fu busy';
+      block.innerHTML = `<div class="ov-fu-q">${SPARK_ICON}<span></span></div><div class="ov-fu-a"><div class="ov-skeleton"><span></span><span></span></div></div>`;
+      block.querySelector('.ov-fu-q span').textContent = question;
+      followupsEl.appendChild(block);
+      const answerEl = block.querySelector('.ov-fu-a');
+      block.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+      let answer = '';
+      let fuRaf = 0;
+      const paintFu = (streaming) => {
+        fuRaf = 0;
+        answerEl.innerHTML = renderMarkdown(answer, sources) + (streaming ? '<span class="cursor"></span>' : '');
+      };
+      const ac = new AbortController();
+      const stop = () => ac.abort();
+      window.addEventListener('pagehide', stop, { once: true });
+      try {
+        const init = {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ q, question, mode, t, history: history.slice(-3) }),
+        };
+        for await (const { event, data } of sseFetch('/api/followup', init, ac.signal)) {
+          const d = JSON.parse(data);
+          if (event === 'delta') {
+            answer += d.text;
+            if (!fuRaf) fuRaf = requestAnimationFrame(() => paintFu(true));
+          } else if (event === 'error') {
+            throw new Error(d.message || 'Follow-up failed.');
+          } else if (event === 'done') {
+            cancelAnimationFrame(fuRaf);
+            paintFu(false);
+            history.push({ question, answer });
+          }
+        }
+        if (!answer) throw new Error('No answer was produced.');
+      } catch (err) {
+        cancelAnimationFrame(fuRaf);
+        if (answer) paintFu(false);
+        else answerEl.innerHTML = `<div class="ov-error">${esc(err.message || 'Follow-up failed.')}</div>`;
+        block.classList.add('error');
+      } finally {
+        block.classList.remove('busy');
+        askForm.classList.remove('busy');
+        asking = false;
+        window.removeEventListener('pagehide', stop);
+        askInput.focus();
       }
     });
 
@@ -304,83 +428,198 @@
     return `${Math.round(h / 24)} days ago`;
   }
 
-  /* ------------------------------------------------ minimal markdown */
-  // Deliberately small and escape-first: the overview is model output built
-  // from untrusted web text, so nothing here ever emits raw HTML from input.
-  function renderMarkdown(md, sources) {
-    const inline = (s) => {
-      s = esc(s);
-      s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-      s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      s = s.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
-      s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (m, t, u) => `<a href="${u}" target="_blank" rel="noopener">${t}</a>`);
-      s = s.replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (m, nums) =>
-        nums
-          .split(',')
-          .map((n) => n.trim())
-          .map((n) => {
-            const src = sources[Number(n) - 1];
-            return src
-              ? `<a class="cite" href="${esc(src.url)}" target="_blank" rel="noopener" title="${esc(src.title)}">${n}</a>`
-              : `<span class="cite">${esc(n)}</span>`;
-          })
-          .join(''),
-      );
-      return s;
+  /* ------------------------------------------------------ image lightbox */
+  const imgGrid = document.querySelector('.img-grid');
+  const lightbox = imgGrid ? setupLightbox(imgGrid) : null;
+
+  function setupLightbox(grid) {
+    const cards = () => Array.from(grid.querySelectorAll('.img-card'));
+    const box = document.createElement('div');
+    box.className = 'lightbox';
+    box.hidden = true;
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-label', 'Image preview');
+    box.innerHTML = `
+      <button type="button" class="lb-btn lb-close" aria-label="Close">${CLOSE_ICON}</button>
+      <button type="button" class="lb-btn lb-prev" aria-label="Previous image">${CHEV(-1)}</button>
+      <button type="button" class="lb-btn lb-next" aria-label="Next image">${CHEV(1)}</button>
+      <figure class="lb-fig">
+        <div class="lb-stage"><img class="lb-img" alt=""><span class="lb-spinner"></span></div>
+        <figcaption class="lb-cap">
+          <span class="lb-title"></span>
+          <span class="lb-meta"></span>
+          <span class="lb-links"><a class="lb-visit" target="_blank" rel="noopener">Visit page</a><a class="lb-open" target="_blank" rel="noopener">Open image</a></span>
+        </figcaption>
+      </figure>`;
+    document.body.appendChild(box);
+    const img = box.querySelector('.lb-img');
+    const stage = box.querySelector('.lb-stage');
+    let index = -1;
+    let lastFocus = null;
+
+    const show = (i) => {
+      const list = cards();
+      if (!list.length) return;
+      index = (i + list.length) % list.length;
+      const a = list[index];
+      const thumb = a.querySelector('img')?.currentSrc || a.querySelector('img')?.src || '';
+      const full = a.dataset.full && a.dataset.full !== '#' ? a.dataset.full : thumb;
+      stage.classList.add('loading');
+      img.onerror = () => { if (img.src !== thumb) img.src = thumb; else stage.classList.remove('loading'); };
+      img.onload = () => stage.classList.remove('loading');
+      img.src = full;
+      img.alt = a.dataset.title || '';
+      box.querySelector('.lb-title').textContent = a.dataset.title || '';
+      box.querySelector('.lb-meta').textContent = [a.dataset.host, a.dataset.res].filter(Boolean).join(' · ');
+      box.querySelector('.lb-visit').href = a.href;
+      box.querySelector('.lb-open').href = full;
+      list.forEach((c, j) => c.classList.toggle('kb-active', j === index));
+      a.scrollIntoView({ block: 'nearest' });
+      // Warm the neighbours so arrow keys feel instant.
+      for (const j of [index + 1, index - 1]) {
+        const n = list[(j + list.length) % list.length];
+        if (n?.dataset.full && n.dataset.full !== '#') new Image().src = n.dataset.full;
+      }
+    };
+    const open = (i) => {
+      lastFocus = document.activeElement;
+      box.hidden = false;
+      document.body.classList.add('lb-open');
+      show(i);
+      box.querySelector('.lb-close').focus();
+    };
+    const close = () => {
+      box.hidden = true;
+      img.src = '';
+      document.body.classList.remove('lb-open');
+      lastFocus?.focus?.();
     };
 
-    const lines = md.replace(/\r/g, '').split('\n');
-    const isBlockStart = (l) => /^(#{1,6}\s|```|\s*[-*+]\s|\s*\d+[.)]\s|\|)/.test(l);
-    let out = '';
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i];
-      if (/^\s*$/.test(line)) { i++; continue; }
-      if (/^```/.test(line)) {
-        const buf = [];
-        i++;
-        while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
-        i++;
-        out += `<pre><code>${esc(buf.join('\n'))}</code></pre>`;
-        continue;
-      }
-      const h = line.match(/^(#{1,6})\s+(.*)$/);
-      if (h) {
-        const lvl = Math.min(h[1].length + 2, 5);
-        out += `<h${lvl}>${inline(h[2])}</h${lvl}>`;
-        i++;
-        continue;
-      }
-      if (/^\s*[-*+]\s+/.test(line)) {
-        const items = [];
-        while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*[-*+]\s+/, ''));
-        out += `<ul>${items.map((t) => `<li>${inline(t)}</li>`).join('')}</ul>`;
-        continue;
-      }
-      if (/^\s*\d+[.)]\s+/.test(line)) {
-        const items = [];
-        while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*\d+[.)]\s+/, ''));
-        out += `<ol>${items.map((t) => `<li>${inline(t)}</li>`).join('')}</ol>`;
-        continue;
-      }
-      if (/^\|/.test(line)) {
-        const rows = [];
-        while (i < lines.length && /^\|/.test(lines[i])) rows.push(lines[i++]);
-        const cells = (r) => r.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
-        const bodyRows = rows.filter((r) => !/^\|\s*:?-{2,}/.test(r));
-        if (bodyRows.length) {
-          const [head, ...rest] = bodyRows;
-          out += `<table><thead><tr>${cells(head).map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${rest
-            .map((r) => `<tr>${cells(r).map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`)
-            .join('')}</tbody></table>`;
-        }
-        continue;
-      }
-      const buf = [line];
-      i++;
-      while (i < lines.length && !/^\s*$/.test(lines[i]) && !isBlockStart(lines[i])) buf.push(lines[i++]);
-      out += `<p>${inline(buf.join(' '))}</p>`;
-    }
-    return out;
+    grid.addEventListener('click', (ev) => {
+      const a = ev.target.closest('.img-card');
+      if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return;
+      ev.preventDefault();
+      open(cards().indexOf(a));
+    });
+    box.querySelector('.lb-close').addEventListener('click', close);
+    box.querySelector('.lb-prev').addEventListener('click', () => show(index - 1));
+    box.querySelector('.lb-next').addEventListener('click', () => show(index + 1));
+    box.addEventListener('click', (ev) => { if (ev.target === box || ev.target === stage) close(); });
+    box.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') { ev.preventDefault(); close(); }
+      else if (ev.key === 'ArrowLeft' || ev.key === 'k') { ev.preventDefault(); show(index - 1); }
+      else if (ev.key === 'ArrowRight' || ev.key === 'j') { ev.preventDefault(); show(index + 1); }
+    });
+    return { open, close, isOpen: () => !box.hidden, index: () => index };
   }
+
+  /* ---------------------------------------------------- inline video play */
+  for (const card of document.querySelectorAll('.result.video[data-embed]')) {
+    const thumb = card.querySelector('.video-thumb');
+    thumb?.addEventListener('click', (ev) => {
+      if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return;
+      ev.preventDefault();
+      playInline(card);
+    });
+  }
+  function playInline(card) {
+    if (card.classList.contains('playing')) return;
+    // Only one player at a time.
+    document.querySelectorAll('.result.video.playing').forEach((c) => stopInline(c));
+    const thumb = card.querySelector('.video-thumb');
+    let src = card.dataset.embed;
+    try {
+      const u = new URL(src);
+      if (!u.searchParams.has('autoplay')) u.searchParams.set('autoplay', '1');
+      src = u.href;
+    } catch { return; }
+    const wrap = document.createElement('div');
+    wrap.className = 'video-player';
+    wrap.innerHTML = `<iframe src="${esc(src)}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="no-referrer" title="Video player"></iframe><button type="button" class="video-stop" aria-label="Close player">${CLOSE_ICON}</button>`;
+    wrap.querySelector('.video-stop').addEventListener('click', () => stopInline(card));
+    thumb.hidden = true;
+    thumb.insertAdjacentElement('afterend', wrap);
+    card.classList.add('playing');
+  }
+  function stopInline(card) {
+    card.querySelector('.video-player')?.remove();
+    const thumb = card.querySelector('.video-thumb');
+    if (thumb) thumb.hidden = false;
+    card.classList.remove('playing');
+  }
+
+  /* ------------------------------------------------- keyboard navigation */
+  const layout = document.querySelector('.results-layout');
+  if (layout) setupKeys(layout);
+
+  function setupKeys(layout) {
+    const items = () => Array.from(layout.querySelectorAll('.result, .img-card'));
+    let cur = -1;
+    const linkOf = (el) => (el.matches('.img-card') ? el : el.querySelector('.r-title a, .video-thumb, a[href]'));
+    const highlight = (i) => {
+      const list = items();
+      if (!list.length) return;
+      cur = Math.max(0, Math.min(i, list.length - 1));
+      list.forEach((el, j) => el.classList.toggle('kb-active', j === cur));
+      list[cur].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    };
+    const clear = () => {
+      cur = -1;
+      layout.querySelectorAll('.kb-active').forEach((el) => el.classList.remove('kb-active'));
+    };
+    const tabs = Array.from(document.querySelectorAll('nav.tabs a.tab'));
+
+    document.addEventListener('keydown', (ev) => {
+      if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
+      if (lightbox?.isOpen()) return; // the dialog handles its own keys
+      if (inField()) {
+        if (ev.key === 'Escape') document.activeElement.blur();
+        return;
+      }
+      switch (ev.key) {
+        case 'j': case 'ArrowDown': ev.preventDefault(); highlight(cur + 1); break;
+        case 'k': case 'ArrowUp': ev.preventDefault(); highlight(cur - 1); break;
+        case 'Enter': {
+          if (cur < 0) return;
+          const el = items()[cur];
+          if (!el) return;
+          ev.preventDefault();
+          if (el.matches('.img-card') && lightbox) return lightbox.open(items().filter((x) => x.matches('.img-card')).indexOf(el));
+          if (el.matches('.result.video[data-embed]')) return playInline(el);
+          const a = linkOf(el);
+          if (a) a.click();
+          break;
+        }
+        case 'o': {
+          if (cur < 0) return;
+          const a = linkOf(items()[cur]);
+          if (a?.href) { ev.preventDefault(); window.open(a.href, '_blank', 'noopener'); }
+          break;
+        }
+        case 'Escape': {
+          const playing = document.querySelector('.result.video.playing');
+          if (playing) stopInline(playing);
+          else clear();
+          break;
+        }
+        case '1': case '2': case '3': case '4': {
+          const tab = tabs[Number(ev.key) - 1];
+          if (tab) { ev.preventDefault(); location.href = tab.href; }
+          break;
+        }
+      }
+    });
+  }
+
+  // "/" focuses the search box like on GitHub.
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === '/' && !inField() && !lightbox?.isOpen()) {
+      const input = document.querySelector('.sb-input');
+      if (input) {
+        ev.preventDefault();
+        input.focus();
+        input.select();
+      }
+    }
+  });
 })();
