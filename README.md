@@ -88,6 +88,26 @@ releases). The YAML ships with `AUTH_MODE: none`, which is fine while the port i
 only reachable on your LAN; before putting it behind a public hostname switch to
 `proxy` and follow the NGINX + TinyAuth section below.
 
+## Your own Google and Reddit credentials
+
+Out of the box SearXNG reaches Google through a search-engine ID shared by every
+SearXNG install and Reddit through a third-party archive. Both get rate-limited,
+which shows up as "N search engines didn't respond (google cse, reddit, …)" and
+a few minutes of thinner results. Three values on the `searxng` container fix
+that; they are optional and independent.
+
+| Variable | Where it comes from |
+|---|---|
+| `GOOGLE_CSE_ID` | https://programmablesearchengine.google.com → Add → name it, turn on **Search the entire web** → Create. Copy the **Search engine ID** (looks like `a1b2c3d4e5f6g7h8i`). No API key is needed. |
+| `REDDIT_CLIENT_ID` | https://www.reddit.com/prefs/apps → **create another app** → type **script**, any name, redirect URI `http://localhost` → Create. The ID is the short string under the app name. |
+| `REDDIT_CLIENT_SECRET` | the **secret** shown on the same app. |
+
+The free Reddit tier allows 100 requests a minute per app, far more than
+personal use needs. On TrueNAS put the values into the YAML (Apps → boogle →
+Edit) and save; with docker compose put them in `.env`. The SearXNG container
+logs one line per credential at start saying whether it was picked up. Keep the
+Reddit secret private: anyone with it can search Reddit as your app.
+
 ## Deploy with docker compose (any Docker host)
 
 ### 1. Get the files onto the server

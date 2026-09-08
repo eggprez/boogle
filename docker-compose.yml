@@ -21,6 +21,9 @@ services:
       - SEARXNG_SECRET=${SEARXNG_SECRET:?set SEARXNG_SECRET in .env (openssl rand -hex 32)}
       - SEARXNG_LIMITER=false
       - SEARXNG_PUBLIC_INSTANCE=false
+      - GOOGLE_CSE_ID=${GOOGLE_CSE_ID:-}
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID:-}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET:-}
     cap_drop: [ALL]
     cap_add: [CHOWN, SETGID, SETUID]
     logging:
