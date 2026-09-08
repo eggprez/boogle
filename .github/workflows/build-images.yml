@@ -59,9 +59,13 @@ jobs:
           for i in $(seq 1 20); do curl -fsS http://127.0.0.1:9999/healthz && break; sleep 0.5; done
       - name: Start app
         run: |
+          # The fake Claude CLI stands in for the real one (not logged in
+          # here), so the place classifier's json path is exercised too.
           docker run -d --name boogle --network host \
             -e AUTH_MODE=none -e SEARXNG_URL=http://127.0.0.1:9999 -e PORT=8080 \
-            -e PUBLIC_URL=http://127.0.0.1:8080 boogle:smoke
+            -e PUBLIC_URL=http://127.0.0.1:8080 \
+            -v "$PWD/app/test/fake-claude.mjs:/fake-claude.mjs:ro" -e CLAUDE_BIN=/fake-claude.mjs \
+            boogle:smoke
           for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8080/api/health && break; sleep 1; done
       - name: Exercise the app
         run: |
