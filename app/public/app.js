@@ -255,6 +255,11 @@
       panel.style.setProperty('--ov-h', `${Math.round(ov.height)}px`);
       panel.classList.toggle('clipped', !panel.classList.contains('open') && panel.scrollHeight > panel.clientHeight + 1);
     };
+    document.addEventListener('boogle:place-panel', () => {
+      es?.close();
+      root.remove();
+      sideEl?.remove();
+    });
     if (panel) {
       new ResizeObserver(fitPanel).observe(root);
       window.addEventListener('resize', fitPanel);
@@ -694,6 +699,8 @@
   async function loadPlaces(slot, retry) {
     const q = slot ? slot.dataset.q : resultsLayout.dataset.q;
     const params = new URLSearchParams({ q });
+    const t = new URLSearchParams(location.search).get('t');
+    if (t) params.set('t', t);
     const geo = await browserGeo();
     if (geo) { params.set('lat', geo.lat.toFixed(4)); params.set('lon', geo.lon.toFixed(4)); }
     if (retry) params.set('retry', '1');
@@ -711,6 +718,9 @@
           slot?.remove();
           mountSide(card);
         }
+        // The map panel answers a place query; an overview that got started
+        // because the verdict came late goes away, sources panel included.
+        document.dispatchEvent(new Event('boogle:place-panel'));
       } else if (slot) slot.replaceWith(card);
       else {
         const main = resultsLayout.querySelector('.main-col');
@@ -738,6 +748,17 @@
     stack.insertBefore(aside, document.getElementById('ov-side'));
     window.dispatchEvent(new Event('resize'));
   }
+  // Map tiles: the tile server refuses a burst now and then; a tile that
+  // failed is asked for again, twice, with a pause, instead of staying blank.
+  document.addEventListener('error', (ev) => {
+    const img = ev.target;
+    if (!(img instanceof HTMLImageElement) || !img.closest('.map-layer')) return;
+    const n = Number(img.dataset.retry || 0);
+    if (n >= 2) return;
+    img.dataset.retry = String(n + 1);
+    const src = img.src.replace(/[?&]r=\d+$/, '');
+    setTimeout(() => { img.src = `${src}${src.includes('?') ? '&' : '?'}r=${n + 1}`; }, 1500 * (n + 1));
+  }, true);
   // Copy buttons (the address) and today's line of an hours table.
   document.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('.copy-btn');

@@ -40,6 +40,7 @@ Examples:
 "denver" -> {"place":true,"mode":"one","name":"Denver, Colorado","kind":"city","what":"","area":"","category":null,"filters":[]}
 "golden gate bridge" -> {"place":true,"mode":"one","name":"Golden Gate Bridge, San Francisco","kind":"landmark","what":"","area":"","category":null,"filters":[]}
 "joe's pizza denver" -> {"place":true,"mode":"one","name":"Joe's Pizza, Denver, Colorado","kind":"business","what":"","area":"","category":null,"filters":[]}
+"opossumtown pike vet hospital frederick md" -> {"place":true,"mode":"one","name":"Opossumtown Pike Vet Hospital, Frederick, Maryland","kind":"business","what":"","area":"","category":null,"filters":[]}
 "things to see in kyoto" -> {"place":true,"mode":"list","name":"","kind":"","what":"Things to do","area":"Kyoto, Japan","category":"attractions","filters":["[\\"tourism\\"~\\"^(attraction|museum|gallery|viewpoint|zoo|aquarium|theme_park)$\\"]","[\\"historic\\"~\\"^(castle|monument|memorial|palace|fort|ruins|archaeological_site|city_gate|tower|citadel)$\\"]"]}
 "pizza" -> {"place":true,"mode":"list","name":"","kind":"","what":"Pizza places","area":"","category":null,"filters":["[\\"amenity\\"=\\"restaurant\\"][\\"cuisine\\"~\\"pizza\\"]"]}
 "dog parks near me" -> {"place":true,"mode":"list","name":"","kind":"","what":"Dog parks","area":"","category":null,"filters":["[\\"leisure\\"=\\"dog_park\\"]"]}

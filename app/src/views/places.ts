@@ -35,7 +35,9 @@ const ATTRIBUTION = `<a class="map-attr" href="https://www.openstreetmap.org/cop
 
 function mapHtml(m: MapModel, opts: { height: number; labels?: boolean; alt: string; youIndex?: number }): string {
   const tiles = m.tiles
-    .map((t) => `<img src="${safeUrl(t.url)}" style="left:${t.left}px;top:${t.top}px" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`)
+    // OpenStreetMap's tile policy asks that the site identify itself: the
+    // origin goes as the referrer (the page otherwise sends none).
+    .map((t) => `<img src="${safeUrl(t.url)}" style="left:${t.left}px;top:${t.top}px" alt="" loading="lazy" decoding="async" referrerpolicy="strict-origin-when-cross-origin">`)
     .join('');
   const pins = m.pins
     .map((p, i) => {
@@ -98,8 +100,9 @@ function ratingHtml(g: GooglePlace | undefined, target: string, compact = false)
 }
 
 /** The weekly hours as a table; Google's descriptions when there are any, else the OSM opening_hours string. */
-function hoursHtml(google: GooglePlace | undefined, raw: string | undefined, units: Units): string {
-  const h: Hours | null = (google?.weekdayHours && hoursFromGoogle(google.weekdayHours)) || (raw ? parseHours(raw, { clock: units === 'mi' ? 12 : 24 }) : null);
+function hoursHtml(google: GooglePlace | undefined, raw: string | undefined, units: Units, siteLines?: string[]): string {
+  const h: Hours | null =
+    (google?.weekdayHours && hoursFromGoogle(google.weekdayHours)) || (siteLines && hoursFromGoogle(siteLines)) || (raw ? parseHours(raw, { clock: units === 'mi' ? 12 : 24 }) : null);
   const status = google?.openNow === undefined ? '' : `<span class="open-now ${google.openNow ? 'yes' : 'no'}">${google.openNow ? 'Open now' : 'Closed now'}</span>`;
   if (!h) return raw ? `<div class="ib-attr"><dt>Hours</dt><dd>${status} ${e(raw)}</dd></div>` : '';
   const rows = compactHours(h)
@@ -150,7 +153,7 @@ export function placePanel(p: Place, o: CardOptions): string {
   const image = p.image || photoUrl(p.google);
   const facts: string[] = [];
   if (address) facts.push(`<div class="ib-attr"><dt>Address</dt><dd>${copyable(address)}</dd></div>`);
-  facts.push(hoursHtml(p.google, p.openingHours, units));
+  facts.push(hoursHtml(p.google, p.openingHours, units, p.weekdayHours));
   if (p.phone) facts.push(`<div class="ib-attr"><dt>Phone</dt><dd><a href="${e(telHref(p.phone))}" class="tel">${icons.phone} ${e(p.phone)}</a></dd></div>`);
   if (o.from) facts.push(`<div class="ib-attr"><dt>Distance</dt><dd>${fmtDistance(distanceKm(o.from, p), units)} from ${o.from.label ? e(o.from.label) : 'you'}</dd></div>`);
   const links = [
@@ -168,6 +171,7 @@ export function placePanel(p: Place, o: CardOptions): string {
   <div class="ib-map">${mapHtml(m, { height: 190, alt: `Map of ${p.name}` })}</div>
   <div class="map-links place-links">${links}</div>
   <dl class="ib-attrs place-facts">${facts.join('')}</dl>
+  ${p.source ? `<p class="place-source">Details from <a href="${safeUrl(p.source)}"${o.target}>${e(hostOf(p.source))}</a></p>` : ''}
   ${reviewsHtml(p.google, o.target)}
   ${AREA_KINDS.has(p.type) ? placeChips(p.name) : ''}
 </section>`;

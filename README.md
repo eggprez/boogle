@@ -349,8 +349,10 @@ while the results scroll: photo, what it is, the first paragraph from
 Wikipedia, a map, a copyable postal address, an hours table (OSM
 `opening_hours` parsed into weekday rows, today highlighted), a tap-to-call
 phone number, and directions by address in Google Maps or Apple Maps, from
-your location when known. When SearXNG already supplied a knowledge panel
-the page says so and no second one is sent. A kind of place comes back as a
+your location when known. When SearXNG already supplied a knowledge panel (Wikipedia/Wikidata), that
+panel is the answer: it gets the map, no place panel is made, and no
+overview runs. A verdict that arrives after the page rendered still
+replaces the overview with the panel on the client, sources panel included. A kind of place comes back as a
 map-and-list card for the main column, each card with a photo when one
 exists, address, today's hours, distance, and Directions / Call / Site
 buttons. Geocoding: Nominatim, with the hit chosen by what Claude said the
@@ -359,7 +361,18 @@ city it shares a name with; on the pattern path only address types that are
 places count, which keeps "things to do in case of fire" out). Nominatim is
 weak at shop names, so a business it cannot find is looked up by name in
 OpenStreetMap through Overpass, within 15 km of the area in the query or of
-you. Lists then ask Overpass for named features
+you. Most small businesses are not in OpenStreetMap at all (a Frederick,
+Maryland vet clinic: the only "Opossumtown" features are the roads), so the
+last resort is the web results the page already has: `business.ts` picks
+the pages most likely to be the business (its distinctive words in the
+title, its own site before directories, home and contact pages first),
+fetches up to four in parallel, and reads the schema.org JSON-LD most
+business sites carry (address, telephone, opening hours, geo, image), or
+failing that a US street address and phone number in the page text, or an
+address in a directory page's title. The street address is geocoded with
+Nominatim, which handles addresses well even for shops it does not know,
+and the panel says which page the details came from. Lists ask Overpass
+for named features
 with the category's tags in a box sized to the place (2–15 km for
 attractions, 1–4 km for restaurants), ranks them (Wikidata-linked and
 Wikipedia-linked first, then the well-described), and runs one Wikidata

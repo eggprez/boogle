@@ -99,11 +99,17 @@ app.get('/search', async (c) => {
     error = (err as Error).message;
     console.error('[search]', q, error);
   }
-  const intent = placesOn ? await Promise.race([classify, new Promise<undefined>((r) => setTimeout(() => r(undefined), 1500))]) : null;
+  // A first-time verdict is a Claude CLI round trip, a few seconds; the
+  // grace is long enough for that so a place does not first render with an
+  // overview that is then torn down.
+  const intent = placesOn ? await Promise.race([classify, new Promise<undefined>((r) => setTimeout(() => r(undefined), 4000))]) : null;
+  // A knowledge panel from SearXNG (Wikipedia/Wikidata) already answers a
+  // place query; the map goes into that panel and no second one is made.
+  const hasInfobox = (data?.infoboxes ?? []).some((ib) => ib.infobox && !/^Q\d+$/.test(ib.infobox.trim()));
   // One place, or a kind of place around the user: the map answers that,
   // an overview would only restate it.
   const noOverview = !!intent && (intent.kind === 'place' || !intent.place);
-  const placesPending = !placesOn || error ? false : intent === undefined ? false : intent === null ? false : intent.kind === 'place' ? 'side' : 'main';
+  const placesPending = !placesOn || error || !intent ? false : intent.kind === 'place' ? (hasInfobox ? false : 'side') : 'main';
   return c.html(resultsPage({ q, tab, page, timeRange, data, error, settings, overviewMode, stories, placesOn: placesOn && !error, placesPending, noOverview }));
 });
 
@@ -133,7 +139,14 @@ app.get('/api/places', async (c) => {
     const intent = await classifyPlace(q);
     if (!intent) return c.body(null, 204);
     if (intent.kind === 'place' && c.req.query('infobox') === '1') return c.body(null, 204);
-    data = await buildPlaces(intent, { fresh: c.req.query('retry') === '1', user });
+    // The web results let a business OpenStreetMap lacks be found on its
+    // own website. Same options as the page's search (the time range too),
+    // so this is the memoised response, not a second SearXNG round trip.
+    const web =
+      intent.kind === 'place'
+        ? await search(q, 'web', 1, { safesearch: settings.safesearch, language: settings.language, timeRange: parseTimeRange(c.req.query('t')) }).then((d) => d.results, () => [])
+        : [];
+    data = await buildPlaces(intent, { fresh: c.req.query('retry') === '1', user, web });
   } catch (err) {
     console.error('[places]', q, (err as Error).message);
     return c.body(null, 204);

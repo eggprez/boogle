@@ -1,4 +1,5 @@
 import { formatNominatimAddress, formatTagAddress, type NominatimAddress } from './address.js';
+import { findOnWeb, type BusinessInfo, type WebHit } from './business.js';
 import { config } from './config.js';
 import { gplacesEnabled, matchPlace, ratePlaces, type GooglePlace } from './gplaces.js';
 
@@ -192,6 +193,10 @@ export interface Place extends Geo {
   address?: string;
   /** Google's record, when a Places API key is configured (rating, reviews, hours, photos) */
   google?: GooglePlace;
+  /** hours as weekday lines, when they came from the business's website */
+  weekdayHours?: string[];
+  /** the web page the facts came from, when OpenStreetMap had no record */
+  source?: string;
   /** Nominatim's addresstype: city, town, country, ...; "user" for the user's own position */
   type: string;
   /** Nominatim's category/type, e.g. "amenity restaurant", for the panel's subtitle */
@@ -268,7 +273,7 @@ const FAILED_CACHE_MS = 60_000;
 const cache = new Map<string, { at: number; value: Promise<PlacesData | null> }>();
 
 /** The card's data for an intent, or null when the place cannot be found. Memoised for a day. */
-export function buildPlaces(intent: PlaceIntent, opts: { fresh?: boolean; user?: UserLocation | null } = {}): Promise<PlacesData | null> {
+export function buildPlaces(intent: PlaceIntent, opts: { fresh?: boolean; user?: UserLocation | null; web?: WebHit[] } = {}): Promise<PlacesData | null> {
   const user = intent.kind === 'list' && !intent.place ? (opts.user ?? null) : null;
   // A list around the user is keyed on a ~100 m grid, so the same block gets the memo.
   const where = user ? `${user.lat.toFixed(3)},${user.lon.toFixed(3)}` : intent.place.toLowerCase();
@@ -276,7 +281,7 @@ export function buildPlaces(intent: PlaceIntent, opts: { fresh?: boolean; user?:
   const hit = cache.get(key);
   const now = Date.now();
   if (hit && !opts.fresh && now - hit.at < CACHE_MS) return hit.value;
-  const value = resolve(intent, user);
+  const value = resolve(intent, user, opts.web ?? []);
   cache.set(key, { at: now, value });
   value.then(
     (d) => {
@@ -290,7 +295,7 @@ export function buildPlaces(intent: PlaceIntent, opts: { fresh?: boolean; user?:
   return value;
 }
 
-async function resolve(intent: PlaceIntent, user: UserLocation | null): Promise<PlacesData | null> {
+async function resolve(intent: PlaceIntent, user: UserLocation | null, web: WebHit[]): Promise<PlacesData | null> {
   if (intent.kind === 'place') {
     // The pattern path has only a regular expression's word for it that the
     // text is a place, so Nominatim's answer must be place-shaped. Claude
@@ -301,7 +306,34 @@ async function resolve(intent: PlaceIntent, user: UserLocation | null): Promise<
     const poi = intent.source === 'claude' && POI_KINDS.has(intent.placeKind ?? '');
     const prefer = intent.source !== 'claude' ? 'area' : poi ? 'poi' : 'any';
     let place = await geocode(intent.place, { prefer });
-    if (!place && poi) place = await findByName(intent.place, user);
+    if (!place && poi) {
+      // Two fallbacks at once, so the wait is the slower of them, not the
+      // sum: OpenStreetMap by name (Overpass, a few seconds, often nothing
+      // for a small business) and the business's own website from the web
+      // results, its address geocoded. OpenStreetMap's record wins when
+      // both answer.
+      const [osm, site] = await Promise.all([
+        findByName(intent.place, user).catch((err) => {
+          console.error('[places] overpass name', intent.place, (err as Error).message);
+          return null;
+        }),
+        web.length
+          ? findOnWeb(intent.place.split(',')[0], web).catch((err) => {
+              console.error('[places] web', intent.place, (err as Error).message);
+              return null;
+            })
+          : Promise.resolve(null),
+      ]);
+      place = osm ?? (site ? fromBusiness(site) : null);
+      // OpenStreetMap knows the place but not its phone or hours; the website does.
+      if (osm && site) {
+        osm.phone ||= site.phone;
+        osm.website ||= site.website;
+        osm.weekdayHours = site.weekdayHours;
+        osm.image ||= site.image;
+        osm.address ||= site.address;
+      }
+    }
     if (!place) return null;
     try {
       await enrichPlace(place);
@@ -370,6 +402,23 @@ async function resolve(intent: PlaceIntent, user: UserLocation | null): Promise<
   return { kind: 'list', category: intent.category, heading, place, items, nearUser: !intent.place, failed };
 }
 
+function fromBusiness(b: BusinessInfo): Place {
+  return {
+    name: b.name,
+    displayName: b.address ? `${b.name}, ${b.address}` : b.name,
+    address: b.address,
+    type: b.kind || 'business',
+    kindLabel: b.kind || 'business',
+    lat: b.lat!,
+    lon: b.lon!,
+    website: b.website,
+    phone: b.phone,
+    weekdayHours: b.weekdayHours,
+    image: b.image,
+    source: b.source,
+  };
+}
+
 /** Claude's kinds that name a point of interest rather than an area. */
 const POI_KINDS = new Set(['landmark', 'natural', 'park', 'museum', 'venue', 'business', 'other']);
 /** Nominatim classes that are areas, not points of interest. */
@@ -396,7 +445,7 @@ async function findByName(full: string, user: UserLocation | null): Promise<Plac
   if (!center) return null;
   const re = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/'/g, "['’]");
   const box = `(${boxAround(center.lat, center.lon, 15)})`;
-  const els = await overpass(`[out:json][timeout:10];nwr["name"~"${re}",i]${box};out center tags 10;`);
+  const els = await overpass(`[out:json][timeout:6];nwr["name"~"${re}",i]${box};out center tags 10;`);
   const ranked = rankAttractions(els, center).filter((a) => a.kind && !/^(place|boundary)/.test(a.kind));
   const a = ranked[0];
   if (!a) return null;

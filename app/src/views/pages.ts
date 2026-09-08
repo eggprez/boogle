@@ -76,7 +76,11 @@ export function resultsPage(opts: {
   let ibMap = '';
   if (infobox) {
     if (infobox.attributes) infobox.attributes = infobox.attributes.filter((a) => !a.value.split(',').every((v) => isQid(v)));
-    if (!infobox.content) infobox.content = candidates.find((c) => c.content)?.content;
+    // Wikipedia's abstract over Wikidata's one-line description (which is
+    // lower-case, "international airport in Charlotte"); either way the
+    // text starts with a capital.
+    const texts = candidates.map((c) => c.content?.trim() ?? '').filter(Boolean).sort((a, b) => b.length - a.length);
+    if (texts[0]) infobox.content = texts[0].charAt(0).toUpperCase() + texts[0].slice(1);
     const seen = new Set<string>();
     infobox.urls = candidates
       .flatMap((c) => c.urls ?? [])
@@ -162,7 +166,7 @@ export function resultsPage(opts: {
   const placesHtml =
     opts.placesPending === 'main' ? `<section class="places places-pending" id="places" data-q="${e(q)}" aria-busy="true"><div class="places-skel"></div></section>` : '';
   const placesSide =
-    opts.placesPending === 'side'
+    opts.placesPending === 'side' && !aside
       ? `<aside class="side-col place-side"><section class="infobox place-panel places-pending" id="places" data-q="${e(q)}" aria-busy="true"><div class="places-skel"></div></section></aside>`
       : '';
 

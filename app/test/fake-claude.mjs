@@ -21,6 +21,8 @@ stdin.on('end', async () => {
     let result;
     if (/^(lisbon|paris|denver|eiffel tower|kyoto)$/i.test(query)) {
       result = { ...no, place: true, name: query.replace(/\b\w/g, (c) => c.toUpperCase()), kind: /tower/i.test(query) ? 'landmark' : 'city' };
+    } else if (/opossumtown/i.test(query)) {
+      result = { ...no, place: true, name: 'Opossumtown Pike Vet Hospital, Frederick, Maryland', kind: 'business' };
     } else if (kind) {
       const area = query.match(/\b(?:in|around)\s+(.+)$/i)?.[1] ?? '';
       result = { ...no, place: true, mode: 'list', kind: '', what: kinds[kind][0], area, filters: [kinds[kind][1]] };
