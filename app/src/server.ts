@@ -10,11 +10,14 @@ import { config } from './config.js';
 import { getFavicon, validHost } from './favicons.js';
 import { generateFollowup, generateOverview, type OverviewEvent } from './overview/index.js';
 import { claudeVersion, type FollowupTurn } from './overview/claude.js';
+import { topStories } from './news.js';
+import { buildPlaces, placeIntent } from './places.js';
 import { redditHealth } from './reddit.js';
-import { autocomplete, parseTimeRange, ping, search, TABS, type SearxResponse, type Tab } from './searxng.js';
+import { autocomplete, parseTimeRange, ping, search, TABS, type SearxResponse, type SearxResult, type Tab } from './searxng.js';
 import { loadSettings, parseMode, sanitize, saveSettings } from './settings.js';
 import { e } from './views/html.js';
 import { homePage, resultsPage, settingsPage } from './views/pages.js';
+import { placesCard } from './views/places.js';
 
 const app = new Hono<AppEnv>();
 
@@ -74,15 +77,43 @@ app.get('/search', async (c) => {
   const settings = await loadSettings(c.get('user'));
   const overviewMode = parseMode(c.req.query('mode'), settings.overviewMode);
 
+  const first = tab === 'web' && page === 1;
+  const searchOpts = { safesearch: settings.safesearch, language: settings.language, timeRange, fresh };
   let data: SearxResponse | null = null;
   let error: string | undefined;
+  let stories: SearxResult[] = [];
   try {
-    data = await search(q, tab, page, { safesearch: settings.safesearch, language: settings.language, timeRange, fresh });
+    // The news search for "Top stories" runs alongside the web search and
+    // gives up quietly (news.ts) rather than slow the page down.
+    [data, stories] = await Promise.all([search(q, tab, page, searchOpts), first && config.topStories && settings.topStories ? topStories(q, searchOpts) : []]);
   } catch (err) {
     error = (err as Error).message;
     console.error('[search]', q, error);
   }
-  return c.html(resultsPage({ q, tab, page, timeRange, data, error, settings, overviewMode }));
+  const placesPending = first && config.places && settings.places && !error && !!placeIntent(q);
+  return c.html(resultsPage({ q, tab, page, timeRange, data, error, settings, overviewMode, stories, placesPending }));
+});
+
+// The places card for a query ("things to do in Lisbon"), as an HTML
+// fragment the results page drops into its #places slot. 204 when the query
+// is not a place one or the place cannot be found.
+app.get('/api/places', async (c) => {
+  const q = (c.req.query('q') ?? '').trim().slice(0, 512);
+  if (!q || !config.places) return c.body(null, 204);
+  const settings = await loadSettings(c.get('user'));
+  if (!settings.places) return c.body(null, 204);
+  let data;
+  try {
+    data = await buildPlaces(q, { fresh: c.req.query('retry') === '1' });
+  } catch (err) {
+    console.error('[places]', q, (err as Error).message);
+    return c.body(null, 204);
+  }
+  if (!data) return c.body(null, 204);
+  const target = settings.openInNewTab ? ' target="_blank" rel="noopener"' : ' rel="noopener"';
+  // The server memoises the data for a day; the browser must not also keep
+  // a copy, or an Overpass hiccup's empty card would stick for the cache's life.
+  return c.html(placesCard(data, target, q), 200, { 'Cache-Control': 'no-store' });
 });
 
 app.get('/suggest', async (c) => {
@@ -200,6 +231,8 @@ app.post('/settings', async (c) => {
   const s = sanitize({
     overviewEnabled: form.overviewEnabled ?? 'off',
     openInNewTab: form.openInNewTab ?? 'off',
+    topStories: form.topStories ?? 'off',
+    places: form.places ?? 'off',
     overviewMode: form.overviewMode,
     model: form.model,
     theme: form.theme,

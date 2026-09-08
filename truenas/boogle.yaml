@@ -72,6 +72,9 @@ services:
       MAX_CONCURRENT_OVERVIEWS: "2"
       DEEP_READ_PAGES: "5"
       SNIPPET_SOURCES: "10"
+      # "Top stories" strip and OpenStreetMap maps/attractions; "false" turns one off for everyone.
+      TOP_STORIES: "true"
+      PLACES: "true"
     volumes:
       - boogle-data:/data
       - boogle-claude-home:/home/node

@@ -3,8 +3,10 @@ import { listBangs } from '../bangs.js';
 import { MODELS, type OverviewMode, type Settings } from '../settings.js';
 import type { RedditHealth } from '../reddit.js';
 import { TABS, TIME_RANGES, type SearxAnswer, type SearxInfobox, type SearxResponse, type SearxResult, type Tab, type TimeRange } from '../searxng.js';
+import { geoFromInfoboxUrls } from '../places.js';
 import { displayUrl, e, fmtDate, hostHue, hostOf, icons, safeUrl } from './html.js';
 import { layout, logo, searchForm } from './layout.js';
+import { infoboxMap } from './places.js';
 
 const TAB_LABEL: Record<Tab, string> = { web: 'All', images: 'Images', news: 'News', videos: 'Videos' };
 const TAB_ICON: Record<Tab, string> = { web: icons.globe, images: icons.image, news: icons.news, videos: icons.video };
@@ -46,6 +48,10 @@ export function resultsPage(opts: {
   error?: string;
   settings: Settings;
   overviewMode: OverviewMode;
+  /** "Top stories" for the query (news.ts); empty when it is not in the news */
+  stories?: SearxResult[];
+  /** the query asks for a place; the client fetches the card from /api/places */
+  placesPending?: boolean;
 }): string {
   const { q, tab, page, data, settings, timeRange } = opts;
   const target = settings.openInNewTab ? ' target="_blank" rel="noopener"' : ' rel="noopener"';
@@ -59,7 +65,11 @@ export function resultsPage(opts: {
   // the winner lacks a description.
   const candidates = (data?.infoboxes ?? []).filter((ib) => ib.infobox && !isQid(ib.infobox));
   const richness = (ib: SearxInfobox) => (ib.attributes?.length ?? 0) * 2 + (ib.img_src ? 3 : 0) + (ib.urls?.length ?? 0);
-  const infobox = candidates.sort((a, b) => richness(b) - richness(a))[0];
+  // Work on a copy: the response is memoised (searxng.ts) and rendered again
+  // for the overview and for repeat searches.
+  const best = candidates.sort((a, b) => richness(b) - richness(a))[0];
+  const infobox: SearxInfobox | undefined = best && { ...best };
+  let ibMap = '';
   if (infobox) {
     if (infobox.attributes) infobox.attributes = infobox.attributes.filter((a) => !a.value.split(',').every((v) => isQid(v)));
     if (!infobox.content) infobox.content = candidates.find((c) => c.content)?.content;
@@ -67,8 +77,15 @@ export function resultsPage(opts: {
     infobox.urls = candidates
       .flatMap((c) => c.urls ?? [])
       .filter((u) => u.url && u.title && !/^P\d+$/.test(u.title) && !seen.has(u.url) && seen.add(u.url));
+    // A place (Wikidata links its coordinates) gets a map in the panel, and
+    // the bare "OpenStreetMap" link it came from becomes the map's own link.
+    const geo = settings.places ? geoFromInfoboxUrls(infobox.urls) : null;
+    if (geo) {
+      ibMap = infoboxMap(geo, infobox.infobox);
+      infobox.urls = infobox.urls.filter((u) => !/openstreetmap\.org/i.test(u.url));
+    }
   }
-  const aside = infobox && tab === 'web' ? infoboxCard(infobox, target) : '';
+  const aside = infobox && tab === 'web' ? infoboxCard(infobox, target, ibMap) : '';
   // A knowledge-panel query (a person, place, film, ...) is answered by the
   // infobox already; an AI overview next to it would be redundant.
   const showOverview = settings.overviewEnabled && tab === 'web' && page === 1 && !opts.error && !aside;
@@ -126,6 +143,21 @@ export function resultsPage(opts: {
     `<div class="answer ${cls}"><div class="answer-text">${e(a.answer)}</div>${a.url ? `<a class="answer-src" href="${safeUrl(a.url)}"${target}>${e(hostOf(a.url))}</a>` : ''}</div>`;
   const shortAnswers = allAnswers.filter((a) => a.answer.length <= 120).map((a) => answerHtml(a, 'short')).join('');
   const longAnswers = allAnswers.filter((a) => a.answer.length > 120).map((a) => answerHtml(a, 'long')).join('');
+
+  // Top stories: a strip of recent coverage above the results, like Google's,
+  // only when news.ts found the query to be current.
+  const stories = opts.stories ?? [];
+  const storiesHtml = stories.length
+    ? `<section class="stories" aria-label="Top stories">
+  <div class="stories-head"><h2>${icons.news} Top stories</h2><a class="stories-more" href="${link('&tab=news')}">More news ›</a></div>
+  <div class="stories-row">${stories.map((r) => storyCard(r, target)).join('')}</div>
+</section>`
+    : '';
+  // Places: the card is fetched after the page loads (app.js) so a slow map
+  // service never holds the results up; this is the slot it lands in.
+  const placesHtml = opts.placesPending
+    ? `<section class="places places-pending" id="places" data-q="${e(q)}" aria-busy="true"><div class="places-skel"></div></section>`
+    : '';
 
   const related = (data?.suggestions ?? []).slice(0, 8);
   const relatedHtml =
@@ -197,7 +229,9 @@ export function resultsPage(opts: {
   <div class="main-col">
     ${didYouMean}
     ${shortAnswers}
+    ${placesHtml}
     ${overview}
+    ${storiesHtml}
     ${longAnswers}
     ${list}
     ${relatedHtml}
@@ -250,6 +284,16 @@ function newsCard(r: SearxResult, target: string): string {
 </article>`;
 }
 
+function storyCard(r: SearxResult, target: string): string {
+  const thumb = r.thumbnail || r.img_src;
+  const date = fmtDate(r.publishedDate);
+  return `<a class="story" href="${safeUrl(r.url)}"${target}>
+  ${thumb && /^https:\/\//i.test(thumb) ? `<span class="story-img"><img src="${safeUrl(thumb)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></span>` : ''}
+  <span class="story-src">${avatar(r.url)}<span class="story-host">${e(hostOf(r.url))}</span>${date ? `<span class="story-date">· ${e(date)}</span>` : ''}</span>
+  <span class="story-title">${e(r.title || r.url)}</span>
+</a>`;
+}
+
 function videoCard(r: SearxResult, target: string): string {
   const thumb = r.thumbnail || r.img_src;
   const meta = [hostOf(r.url), r.author, r.length, fmtDate(r.publishedDate)].filter(Boolean).map(e).join(' · ');
@@ -276,7 +320,7 @@ function imageCard(r: SearxResult): string {
 </a>`;
 }
 
-function infoboxCard(ib: SearxInfobox, target: string): string {
+function infoboxCard(ib: SearxInfobox, target: string, map = ''): string {
   const attrs = (ib.attributes ?? [])
     .slice(0, 10)
     .map((a) => `<div class="ib-attr"><dt>${e(a.label)}</dt><dd>${e(a.value)}</dd></div>`)
@@ -289,6 +333,7 @@ function infoboxCard(ib: SearxInfobox, target: string): string {
   ${ib.img_src ? `<img class="ib-img" src="${safeUrl(ib.img_src)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
   <h2 class="ib-title">${e(ib.infobox)}</h2>
   ${ib.content ? `<p class="ib-content">${e(ib.content)}</p>` : ''}
+  ${map}
   ${attrs ? `<dl class="ib-attrs">${attrs}</dl>` : ''}
   ${urls ? `<div class="ib-links">${urls}</div>` : ''}
 </section>`;
@@ -358,6 +403,14 @@ export function settingsPage(opts: {
           ${['auto', 'all', 'en', 'en-US', 'en-GB', 'de', 'fr', 'es', 'it', 'nl', 'pt', 'ja', 'zh'].map((l) => `<option value="${l}"${sel(s.language, l)}>${l}</option>`).join('')}
         </select>
       </div>
+      <label class="row switch">
+        <input type="checkbox" name="topStories"${chk(s.topStories)}>
+        <span><strong>Top stories</strong><small>When a query is in the news, a strip of recent coverage goes above the web results. Runs a news search alongside every web search.</small></span>
+      </label>
+      <label class="row switch">
+        <input type="checkbox" name="places"${chk(s.places)}>
+        <span><strong>Maps and places</strong><small>A map on knowledge panels for places, and an attractions card for queries like “things to do in Lisbon” or “museums in Tokyo”, from OpenStreetMap and Wikidata.</small></span>
+      </label>
       <label class="row switch">
         <input type="checkbox" name="openInNewTab"${chk(s.openInNewTab)}>
         <span><strong>Open results in a new tab</strong></span>

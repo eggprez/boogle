@@ -73,6 +73,13 @@ services:
       - MAX_CONCURRENT_OVERVIEWS=${MAX_CONCURRENT_OVERVIEWS:-2}
       - DEEP_READ_PAGES=${DEEP_READ_PAGES:-5}
       - SNIPPET_SOURCES=${SNIPPET_SOURCES:-10}
+      - TOP_STORIES=${TOP_STORIES:-true}
+      - PLACES=${PLACES:-true}
+      - NOMINATIM_URL=${NOMINATIM_URL:-}
+      - OVERPASS_URL=${OVERPASS_URL:-}
+      - OVERPASS_FALLBACK_URL=${OVERPASS_FALLBACK_URL:-}
+      - WIKIDATA_SPARQL_URL=${WIKIDATA_SPARQL_URL:-}
+      - MAP_TILE_URL=${MAP_TILE_URL:-}
     volumes:
       - boogle-data:/data
       - boogle-claude-home:/home/node

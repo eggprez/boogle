@@ -22,6 +22,17 @@ minus Google's AI Overview and plus one written by Claude.
 - **Model picker** (Haiku / Sonnet / Opus) and an **on-disk overview cache** so
   repeat searches are instant and don't spend quota. The cache key includes a
   hash of the prompt, so editing the prompt never serves stale overviews.
+- **Top stories**: when a query is in the news, a strip of recent coverage
+  goes above the web results, the way Google does it. A news search runs
+  alongside every web search; the strip appears only when at least three
+  sites covered the query in the past week and the newest story is under two
+  days old, so "python list comprehension" never gets one.
+- **Maps and places**, without a Google Maps key: a knowledge panel for a
+  place (a city, a landmark) gets a map, and a query like *things to do in
+  Lisbon*, *museums in Tokyo* or *map of Berlin* gets a card with a pinned
+  map and a row of attractions with photos and Wikipedia links. Built from
+  OpenStreetMap's Nominatim, Overpass and tile servers plus one Wikidata
+  query, all keyless; the map is a mosaic of plain tiles, no map library.
 - **Time filter** (past day / week / month / year) on every tab, real
   **favicons** on result cards (proxied and cached, never fetched by your
   browser), page **thumbnails** on web results when an engine supplies one,
@@ -52,6 +63,8 @@ app/                   the Boogle web app (Node 24 + TypeScript + Hono)
   src/server.ts        routes: /, /search, /api/overview (SSE), /api/followup (SSE), /favicon, /suggest, /settings, /opensearch.xml
   src/searxng.ts       SearXNG JSON API client (one retry, time-range filter, 5-minute memo)
   src/rank.ts          re-sorts SearXNG's results by score and caps results per host
+  src/news.ts          "Top stories": the parallel news search and its freshness gate
+  src/places.ts        maps and attractions: place intent, Nominatim, Overpass, Wikidata, tile maths
   src/favicons.ts      favicon proxy with on-disk cache
   src/overview/        overview pipeline: pick sources → (deep: fetch + Readability) → claude -p → cache
   src/views/           server-rendered HTML
@@ -221,7 +234,8 @@ secret only NGINX knows.
 ## Settings page
 
 `/settings` (the gear icon) has: overview on/off, source (Claude's knowledge,
-snippets, or read the pages), model, safe search, language, open-in-new-tab, theme, a status panel,
+snippets, or read the pages), model, safe search, language, top stories on/off,
+maps and places on/off, open-in-new-tab, theme, a status panel,
 a cache-clear button, the keyboard shortcuts, and the bang list. Settings are stored per user under
 `/data/settings/` in the `boogle-data` volume.
 
@@ -245,6 +259,13 @@ a cache-clear button, the keyboard shortcuts, and the bang list. Settings are st
 | `SNIPPET_SOURCES` | `10` | results given to Claude in snippet and knowledge mode |
 | `REDDIT_WORKER_URL` | `http://reddit:8080` (compose) | the Reddit worker; empty = no Reddit backfill |
 | `REDDIT_WEIGHT` | `0.8` | engine weight Reddit threads get when merged into the ranking |
+| `TOP_STORIES` | `true` | run the news search for the "Top stories" strip (users can also switch it off in Settings) |
+| `PLACES` | `true` | maps and attractions cards (also a per-user setting) |
+| `NOMINATIM_URL` | `https://nominatim.openstreetmap.org` | geocoder for place queries |
+| `OVERPASS_URL` | `https://overpass-api.de/api/interpreter` | Overpass API for the attractions list |
+| `OVERPASS_FALLBACK_URL` | *(empty)* | second Overpass server tried when the first fails; the public mirrors tend to hang, so it is off |
+| `WIKIDATA_SPARQL_URL` | `https://query.wikidata.org/sparql` | photos, descriptions and Wikipedia links for attractions |
+| `MAP_TILE_URL` | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | tile template the browser loads maps from |
 
 On the `reddit` container:
 
@@ -253,6 +274,54 @@ On the `reddit` container:
 | `REDDIT_MIN_INTERVAL_MS` | `5000` | minimum gap between two Reddit searches (plus up to 2 s of jitter) |
 | `REDDIT_CACHE_TTL_HOURS` | `72` | how long a query's Reddit results are served before being refreshed |
 | `REDDIT_MAX_RESULTS` | `20` | threads fetched per query |
+
+## Top stories and places
+
+**Top stories.** Google decides to show news for a query with a
+"query deserves freshness" signal. Here the signal is the news category
+itself: on the first page of the web tab, `news.ts` runs a news search
+(past week, or past day when that filter is on) in parallel with the web
+search and keeps stories that are under a week old and whose title or
+snippet contains most of the query's terms. The strip shows only when three
+different sites qualify and the newest of them is under two days old. The
+news search gives up after 7 s, so a slow news engine costs nothing but the
+strip. It adds one fan-out to Google News, Brave News and Bing News per web
+search; those are separate engines with their own suspension timers, so a
+burst does not affect the web engines.
+
+**Places.** `places.ts` recognises two kinds of query with regular
+expressions, no network: *category in place* (things to do / attractions /
+museums / restaurants / cafés / bars / hotels / parks / beaches, in or near
+somewhere; also "Lisbon attractions") and *map of / where is / X map*. The
+results page then leaves a slot that `app.js` fills from `/api/places`, so
+the map services never hold the results up. That endpoint geocodes the place
+with Nominatim (only address types that are places count, which is what
+keeps "things to do in case of fire" out), asks Overpass for named features
+with the category's tags in a box sized to the place (2–15 km for
+attractions, 1–4 km for restaurants), ranks them (Wikidata-linked and
+Wikipedia-linked first, then the well-described), and runs one Wikidata
+SPARQL query for photos, one-line descriptions and English Wikipedia links.
+Answers are memoised for a day. A bare place query ("lisbon") takes another
+route: SearXNG's Wikidata infobox already links the place's coordinates on
+OpenStreetMap, and the panel draws a map from that link.
+
+The map itself is a mosaic of 256 px OpenStreetMap tiles laid out by the
+server around a centre point, with pins placed by the same Web Mercator
+projection; there is no map library and no client code beyond the pin/card
+hover sync. The dark theme inverts the tiles into a night map. OpenStreetMap
+asks that tile use stays light (this is one user's searches) and that the
+app identifies itself: requests carry `SITE_NAME/0.1 (+PUBLIC_URL)`.
+
+What this cannot match: reviews and star ratings (only Google and Yelp have
+them), and reliable opening hours (OpenStreetMap tags them sporadically). So
+the restaurant, café, bar and hotel categories order places by how complete
+their OpenStreetMap record is, which is a weak proxy for quality; the
+attractions and museums categories, ranked by Wikidata and Wikipedia
+presence, come out close to a guidebook's list. Overpass is the slow step
+(2–4 s for a big city, occasionally a timeout: the card then shows the map
+and a note); its query is deliberately two tag filters on a bounding box,
+because adding `amenity=place_of_worship` or using `around:` made Lisbon
+take ten times longer.
 
 ## Reliability notes
 

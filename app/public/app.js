@@ -634,6 +634,56 @@
     card.classList.remove('playing');
   }
 
+  /* --------------------------------------------------------------- places */
+  // The results page leaves an empty #places slot for a place query; the card
+  // itself comes from /api/places once the page is up, so a slow map service
+  // never delays the results. Hovering a card lights its pin and vice versa.
+  const placesSlot = document.getElementById('places');
+  if (placesSlot && placesSlot.dataset.q !== undefined && !placesSlot.dataset.loaded) loadPlaces(placesSlot);
+  else if (placesSlot) wirePins(placesSlot);
+  async function loadPlaces(slot, retry) {
+    try {
+      const res = await fetch('/api/places?q=' + encodeURIComponent(slot.dataset.q) + (retry ? '&retry=1' : ''), { headers: { Accept: 'text/html' } });
+      if (res.status !== 200) return slot.remove();
+      const tpl = document.createElement('template');
+      tpl.innerHTML = await res.text();
+      const card = tpl.content.firstElementChild;
+      if (!card) return slot.remove();
+      slot.replaceWith(card);
+      wirePins(card);
+    } catch {
+      slot.remove();
+    }
+  }
+  function wirePins(root) {
+    // "Try again" after a map-service timeout: swap the card back to the
+    // skeleton and fetch once more, bypassing the server's memo.
+    root.querySelector('.places-retry')?.addEventListener('click', (ev) => {
+      const slot = document.createElement('section');
+      slot.className = 'places places-pending';
+      slot.id = 'places';
+      slot.dataset.q = ev.currentTarget.dataset.q;
+      slot.innerHTML = '<div class="places-skel"></div>';
+      root.replaceWith(slot);
+      loadPlaces(slot, true);
+    });
+    const pin = (i) => root.querySelector(`.pin[data-pin="${i}"]`);
+    const card = (i) => root.querySelector(`.place-card[data-pin="${i}"]`);
+    for (const el of root.querySelectorAll('.place-card')) {
+      const i = el.dataset.pin;
+      el.addEventListener('mouseenter', () => pin(i)?.classList.add('hot'));
+      el.addEventListener('mouseleave', () => pin(i)?.classList.remove('hot'));
+      el.addEventListener('focus', () => pin(i)?.classList.add('hot'));
+      el.addEventListener('blur', () => pin(i)?.classList.remove('hot'));
+    }
+    for (const el of root.querySelectorAll('.pin[data-pin]')) {
+      const i = el.dataset.pin;
+      el.addEventListener('mouseenter', () => card(i)?.classList.add('hot'));
+      el.addEventListener('mouseleave', () => card(i)?.classList.remove('hot'));
+      el.addEventListener('click', () => card(i)?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }));
+    }
+  }
+
   /* ------------------------------------------------- keyboard navigation */
   const layout = document.querySelector('.results-layout');
   if (layout) setupKeys(layout);

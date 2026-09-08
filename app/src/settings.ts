@@ -23,6 +23,8 @@ export interface Settings {
   safesearch: 0 | 1 | 2;
   language: string; // SearXNG language code, e.g. 'auto', 'en-US', 'all'
   openInNewTab: boolean;
+  topStories: boolean; // "Top stories" strip on the web tab when the query is in the news
+  places: boolean; // maps and attractions from OpenStreetMap
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -33,6 +35,8 @@ export const DEFAULT_SETTINGS: Settings = {
   safesearch: 0,
   language: 'auto',
   openInNewTab: false,
+  topStories: true,
+  places: true,
 };
 
 export const MODELS: { id: Model; label: string; blurb: string }[] = [
@@ -65,6 +69,8 @@ export function sanitize(input: Partial<Record<keyof Settings, unknown>>): Setti
   const s = { ...DEFAULT_SETTINGS };
   s.overviewEnabled = toBool(input.overviewEnabled, s.overviewEnabled);
   s.openInNewTab = toBool(input.openInNewTab, s.openInNewTab);
+  s.topStories = toBool(input.topStories, s.topStories);
+  s.places = toBool(input.places, s.places);
   s.overviewMode = parseMode(input.overviewMode, s.overviewMode);
   if (MODELS.some((m) => m.id === input.model)) s.model = input.model as Model;
   if (input.theme === 'system' || input.theme === 'light' || input.theme === 'dark') s.theme = input.theme;
