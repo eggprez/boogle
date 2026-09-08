@@ -321,8 +321,9 @@ No SearXNG handy? `node app/test/stub-searxng.mjs` serves canned results on
 - **Bangs**: edit the table in `app/src/bangs.ts`.
 - **Engines**: the `engines:` block in `searxng/settings.yml` is tuned for
   Google-like results: Google CSE weighted highest, then Startpage, Brave and
-  Bing, plus Stack Overflow and Reddit in web results; translators, icon
-  libraries, stock photo sites and broken video engines are off; every engine
+  Bing, plus Reddit in web results; Stack Overflow (API quota too small),
+  translators, icon libraries, stock photo sites and broken video engines are
+  off; every engine
   is capped at 5 s. Flip `disabled` on any entry to change the mix; SearXNG's
   defaults apply to everything unlisted.
 - **DuckDuckGo** is off on purpose: its HTML endpoint answers every

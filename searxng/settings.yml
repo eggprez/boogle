@@ -2,11 +2,26 @@
 # defaults (use_default_settings: true). The instance is private: only the
 # boogle container can reach it, so the bot limiter is off and JSON is on.
 #
-# Engine tuning (measured 2026-09-07 against a fresh instance):
-#   web    Google CSE + Startpage (Google results) + Brave supply nearly all
-#          useful results; DuckDuckGo hit a CAPTCHA on every query. Google is
-#          weighted highest so ranking feels like Google. Reddit and Stack
-#          Overflow are pulled into web results the way Google surfaces them.
+# How SearXNG ranks: every merged result scores
+#     Π(weights of the engines that returned it) × (#engines) × Σ 1/position
+# so a page that two engines both list near the top beats anything a single
+# engine returns, and weights matter far less than agreement. The app then
+# re-sorts by that score (see app/src/rank.ts) because SearXNG's own grouping
+# pass demotes results that carry a thumbnail. Measure any change here with
+#     cd app && npm run eval -- engines      (per-engine health, latency, overlap)
+#     cd app && npm run eval -- merged       (hit rate against scripts/eval-queries.json)
+#
+# Engine tuning (measured 2026-09-08 with app/scripts/search-eval.mjs):
+#   web    google (google.com HTML) answers every query in ~0.4 s and is the
+#          ranking to imitate, so it carries the top weight. Google CSE is a
+#          second Google-derived list, so pages on both get the agreement
+#          bonus. Brave and Bing are independent indexes. Startpage switched
+#          to Bing's index and SearXNG's parser currently returns nothing from
+#          it; DuckDuckGo, Qwant and Mojeek answer server requests with a
+#          CAPTCHA or an access-denied page. Reddit is pulled into web
+#          results the way Google surfaces it (own API credentials
+#          recommended, see below); Stack Overflow is off because its API
+#          quota (300 requests/day per IP) kept it suspended.
 #   images icon libraries (devicons, lucide) produced ~70% of results and stock
 #          photo sites added unrelated photos; only real web-image engines stay.
 #   videos vimeo was erroring; small federated sources removed.
@@ -36,6 +51,14 @@ search:
   autocomplete_min: 2
   safe_search: 0
   default_lang: "auto"
+  # After an upstream error SearXNG benches the engine for this long. The
+  # defaults (3 min for a 429, an hour for a CAPTCHA) are sized for busy public
+  # instances; on a single-user one they mostly mean "no Google for the next
+  # hour because one request tripped a limit". Retry sooner instead.
+  suspended_times:
+    SearxEngineAccessDenied: 60
+    SearxEngineCaptcha: 600
+    SearxEngineTooManyRequests: 60
 
 outgoing:
   # Default per-engine timeout and the hard cap.
@@ -50,44 +73,41 @@ ui:
   default_locale: "en"
   results_on_new_tab: false
 
+# Hostnames plugin: a host in low_priority scores zero, so it sinks to the end
+# of the page without disappearing; high_priority scores as if every engine
+# had listed it first; remove drops it. Patterns are regular expressions on
+# the hostname.
+hostnames:
+  low_priority:
+    - '(.*\.)?pinterest\.(com|[a-z]{2})$'   # image boards that never answer a web query
+    - '(.*\.)?facebook\.com$'               # login-walled
+    - '(.*\.)?quora\.com$'                  # login-walled, thin answers
+
 engines:
   # ---------------------------------------------------------------- web ----
-  # Set GOOGLE_CSE_ID on the container to search with your own Programmable
-  # Search Engine (programmablesearchengine.google.com, "search the entire
-  # web"). The placeholder line is filled in, or dropped, by entrypoint.sh.
-  # Without it SearXNG's shared public ID is used, which Google rate-limits
-  # for everyone at once ("unusual traffic" -> engine suspended).
-  - name: google cse
+  - name: google
+    disabled: false
     weight: 2.0
-    CX: "__GOOGLE_CSE_ID__"
-  - name: startpage
+  - name: google cse
     weight: 1.5
   - name: brave
     weight: 1.0
-  - name: duckduckgo
-    disabled: true            # CAPTCHA on every request; DDG results are Bing's anyway
   - name: bing
     disabled: false           # stands in for DuckDuckGo (same underlying index)
     weight: 1.0
+  - name: startpage
+    disabled: true            # now serves Bing's index, and SearXNG's parser returns nothing from it (2026-09)
+  - name: duckduckgo
+    disabled: true            # CAPTCHA on every request; DDG results are Bing's anyway
 
-  # Reddit, two ways. With REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET set on the
-  # container (a free "script" app from reddit.com/prefs/apps) the official
-  # API engine below runs and the archive fallback is switched off by
-  # entrypoint.sh. Without credentials the official engine is not loaded and
-  # search goes through pullpush.io, a third-party archive that rate-limits
-  # hard (HTTP 429 -> suspended). Reddit threads also keep arriving via
-  # Google/Startpage/Brave/Bing either way.
+  # Reddit. SearXNG removed its Reddit engine and reddit.com answers 403/429
+  # to server requests, so this uses the PullPush archive API (a public mirror
+  # of Reddit posts). Coverage is good, ranking is by score, freshness lags a
+  # bit. Reddit threads also keep arriving via Google/Brave/Bing.
   - name: reddit
-    engine: reddit_oauth
+    engine: json_engine
     shortcut: re
     categories: [general, social media]
-    weight: 0.8
-    timeout: 6.0
-  - name: reddit archive
-    engine: json_engine
-    shortcut: rea
-    categories: [general, social media]
-    disabled: false  # boogle:reddit-fallback
     search_url: https://api.pullpush.io/reddit/search/submission/?q={query}&size=20&sort=desc&sort_type=score
     results_query: data
     url_query: permalink
@@ -97,15 +117,28 @@ engines:
     weight: 0.6
     timeout: 5.0
     about:
-      website: https://pullpush.io
-      use_official_api: false
-      require_api_key: false
+      website: https://www.reddit.com
+      official_api_documentation: https://pullpush.io
       results: JSON
 
+  # Optional, best quality: Reddit through your own free Google Programmable
+  # Search Engine restricted to reddit.com. Create one at
+  # https://programmablesearchengine.google.com (sites to search: reddit.com),
+  # copy its "Search engine ID" into cx below, and set disabled: false.
+  # - name: reddit via google
+  #   engine: google_cse
+  #   shortcut: rg
+  #   categories: [general, social media]
+  #   cx: "YOUR_SEARCH_ENGINE_ID"
+  #   weight: 1.0
+  #   disabled: true
+
+  # Stack Overflow: the Stack Exchange API allows 300 anonymous requests a
+  # day per IP and SearXNG's engine has no way to use a key, so it spent most
+  # of its time suspended ("too many requests"). Google surfaces the same
+  # threads, so it is off.
   - name: stackoverflow
-    disabled: false
-    categories: [general, it, q&a]
-    weight: 0.8
+    disabled: true
   # Translators and dictionaries: noise for a general search box, and slow.
   - name: lingva
     disabled: true
@@ -118,7 +151,6 @@ engines:
   # ------------------------------------------------------------- images ----
   - name: google cse images
     weight: 2.0
-    CX: "__GOOGLE_CSE_ID__"
   - name: startpage images
     weight: 1.5
   - name: brave.images
