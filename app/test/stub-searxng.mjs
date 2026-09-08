@@ -23,8 +23,13 @@ createServer((req, res) => {
     const results =
       cat === 'images' ? [1, 2, 3].map((i) => result(i, { img_src: `https://example${i}.com/full.jpg`, thumbnail_src: `https://example${i}.com/t.jpg`, resolution: '800x600' })) :
       cat === 'videos' ? [1, 2].map((i) => result(i, { thumbnail: `https://example${i}.com/t.jpg`, iframe_src: `https://www.youtube-nocookie.com/embed/x${i}`, length: '3:21' })) :
-      [1, 2, 3, 4, 5].map((i) => result(i));
-    return json({ query: q, number_of_results: results.length, results, suggestions: ['stub related'], answers: [], infoboxes: [], corrections: [], unresponsive_engines: [['slowengine', 'timeout']] });
+      [1, 2, 3, 4, 5].map((i) => result(i, i === 2 ? { thumbnail: `https://example${i}.com/thumb.jpg` } : {}));
+    // A query mentioning "infobox" gets a knowledge panel, to check the
+    // sidebar layout and that the AI overview steps aside for it.
+    const infoboxes = /infobox/i.test(q)
+      ? [{ infobox: 'Stub Topic', id: 'https://en.wikipedia.org/wiki/Stub', content: 'A stub topic that exists so the infobox layout can be checked without SearXNG.', img_src: null, urls: [{ title: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/Stub' }], attributes: [{ label: 'Type', value: 'Test fixture' }, { label: 'Since', value: '2026' }] }]
+      : [];
+    return json({ query: q, number_of_results: results.length, results, suggestions: ['stub related'], answers: [], infoboxes, corrections: [], unresponsive_engines: [['slowengine', 'timeout']] });
   }
   res.writeHead(404); res.end();
 }).listen(port, '0.0.0.0', () => console.log(`stub searxng on :${port}`));

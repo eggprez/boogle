@@ -327,6 +327,12 @@ body.results::before, body.settings::before {
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .r-date { color: var(--muted); }
 .r-meta { margin: 2px 0 4px; color: var(--muted); font-size: 13px; }
+.r-text { flex: 1; min-width: 0; }
+.result.has-thumb { display: flex; gap: 18px; align-items: flex-start; }
+.r-thumb { flex: none; display: block; }
+.r-thumb img { width: 96px; height: 96px; object-fit: cover; border-radius: 12px; border: 1px solid var(--border); background: var(--bg-2); display: block; transition: transform 0.2s; }
+.r-thumb:hover img { transform: scale(1.03); }
+@media (max-width: 560px) { .r-thumb img { width: 72px; height: 72px; } }
 
 /* keyboard highlight (j / k) */
 .result.kb-active { position: relative; }

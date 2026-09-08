@@ -1,12 +1,13 @@
 import { config } from '../config.js';
 import { listBangs } from '../bangs.js';
-import { MODELS, type Settings } from '../settings.js';
+import { MODELS, type OverviewMode, type Settings } from '../settings.js';
 import { TABS, TIME_RANGES, type SearxAnswer, type SearxInfobox, type SearxResponse, type SearxResult, type Tab, type TimeRange } from '../searxng.js';
 import { displayUrl, e, fmtDate, hostHue, hostOf, icons, safeUrl } from './html.js';
 import { layout, logo, searchForm } from './layout.js';
 
 const TAB_LABEL: Record<Tab, string> = { web: 'All', images: 'Images', news: 'News', videos: 'Videos' };
 const TAB_ICON: Record<Tab, string> = { web: icons.globe, images: icons.image, news: icons.news, videos: icons.video };
+const MODE_BLURB: Record<OverviewMode, string> = { knowledge: "from Claude's knowledge", snippets: 'from snippets', deep: 'reads the pages' };
 
 export function homePage(settings: Settings): string {
   return layout({
@@ -17,7 +18,7 @@ export function homePage(settings: Settings): string {
 <div class="glow" aria-hidden="true"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span><div class="glow-grid"></div></div>
 <a class="iconbtn corner" href="/settings" title="Settings" aria-label="Settings">${icons.gear}</a>
 <main class="home-main">
-  <span class="pill">${icons.bolt} ${settings.overviewEnabled ? `AI Overview · ${e(cap(settings.model))} · ${settings.overviewMode === 'deep' ? 'reads the pages' : 'from snippets'}` : 'AI Overview off'}</span>
+  <span class="pill">${icons.bolt} ${settings.overviewEnabled ? `AI Overview · ${e(cap(settings.model))} · ${MODE_BLURB[settings.overviewMode]}` : 'AI Overview off'}</span>
   ${logo('lg')}
   <p class="tagline">Search the web. Get a <b>Claude</b> overview, not Google's.</p>
   ${searchForm({ q: '', tab: 'web', size: 'lg', autofocus: true })}
@@ -43,12 +44,33 @@ export function resultsPage(opts: {
   data: SearxResponse | null;
   error?: string;
   settings: Settings;
-  overviewMode: 'snippets' | 'deep';
+  overviewMode: OverviewMode;
 }): string {
   const { q, tab, page, data, settings, timeRange } = opts;
   const target = settings.openInNewTab ? ' target="_blank" rel="noopener"' : ' rel="noopener"';
-  const showOverview = settings.overviewEnabled && tab === 'web' && page === 1 && !opts.error;
   const results = data?.results ?? [];
+
+  // SearXNG's Wikidata engine sometimes fails to resolve labels and returns
+  // bare Q-ids ("Q575650"); such a box is useless, so skip it.
+  const isQid = (s: unknown) => /^Q\d+$/.test(String(s ?? '').trim());
+  // Several engines can each supply an infobox (Wikipedia: text only; Wikidata:
+  // image + facts). Show the richest one, and borrow Wikipedia's abstract if
+  // the winner lacks a description.
+  const candidates = (data?.infoboxes ?? []).filter((ib) => ib.infobox && !isQid(ib.infobox));
+  const richness = (ib: SearxInfobox) => (ib.attributes?.length ?? 0) * 2 + (ib.img_src ? 3 : 0) + (ib.urls?.length ?? 0);
+  const infobox = candidates.sort((a, b) => richness(b) - richness(a))[0];
+  if (infobox) {
+    if (infobox.attributes) infobox.attributes = infobox.attributes.filter((a) => !a.value.split(',').every((v) => isQid(v)));
+    if (!infobox.content) infobox.content = candidates.find((c) => c.content)?.content;
+    const seen = new Set<string>();
+    infobox.urls = candidates
+      .flatMap((c) => c.urls ?? [])
+      .filter((u) => u.url && u.title && !/^P\d+$/.test(u.title) && !seen.has(u.url) && seen.add(u.url));
+  }
+  const aside = infobox && tab === 'web' ? infoboxCard(infobox, target) : '';
+  // A knowledge-panel query (a person, place, film, ...) is answered by the
+  // infobox already; an AI overview next to it would be redundant.
+  const showOverview = settings.overviewEnabled && tab === 'web' && page === 1 && !opts.error && !aside;
   const t = timeRange ? `&t=${timeRange}` : '';
   const link = (params: string) => `/search?q=${encodeURIComponent(q)}${params}`;
 
@@ -116,24 +138,6 @@ export function resultsPage(opts: {
     </nav>`
     : '';
 
-  // SearXNG's Wikidata engine sometimes fails to resolve labels and returns
-  // bare Q-ids ("Q575650"); such a box is useless, so skip it.
-  const isQid = (s: unknown) => /^Q\d+$/.test(String(s ?? '').trim());
-  // Several engines can each supply an infobox (Wikipedia: text only; Wikidata:
-  // image + facts). Show the richest one, and borrow Wikipedia's abstract if
-  // the winner lacks a description.
-  const candidates = (data?.infoboxes ?? []).filter((ib) => ib.infobox && !isQid(ib.infobox));
-  const richness = (ib: SearxInfobox) => (ib.attributes?.length ?? 0) * 2 + (ib.img_src ? 3 : 0) + (ib.urls?.length ?? 0);
-  const infobox = candidates.sort((a, b) => richness(b) - richness(a))[0];
-  if (infobox) {
-    if (infobox.attributes) infobox.attributes = infobox.attributes.filter((a) => !a.value.split(',').every((v) => isQid(v)));
-    if (!infobox.content) infobox.content = candidates.find((c) => c.content)?.content;
-    const seen = new Set<string>();
-    infobox.urls = candidates
-      .flatMap((c) => c.urls ?? [])
-      .filter((u) => u.url && u.title && !/^P\d+$/.test(u.title) && !seen.has(u.url) && seen.add(u.url));
-  }
-  const aside = infobox && tab === 'web' ? infoboxCard(infobox, target) : '';
 
   const overview = showOverview
     ? `<section class="overview" id="overview" data-q="${e(q)}" data-mode="${opts.overviewMode}" data-model="${e(settings.model)}" data-t="${timeRange}">
@@ -201,13 +205,19 @@ function avatar(url: string): string {
 
 function webResult(r: SearxResult, target: string): string {
   const date = fmtDate(r.publishedDate);
-  return `<article class="result">
-  <a class="r-head" href="${safeUrl(r.url)}"${target}>
-    ${avatar(r.url)}
-    <span class="r-site"><span class="r-host">${e(hostOf(r.url))}</span><span class="r-url">${e(displayUrl(r.url))}</span></span>
-  </a>
-  <h3 class="r-title"><a href="${safeUrl(r.url)}"${target}>${e(r.title || r.url)}</a></h3>
-  ${r.content || date ? `<p class="r-snippet">${date ? `<span class="r-date">${e(date)} — </span>` : ''}${e(r.content ?? '')}</p>` : ''}
+  // Some engines (Brave, Qwant, ...) attach a page thumbnail to web results;
+  // shown on the right like Google's, and dropped if the image fails to load.
+  const thumb = r.thumbnail && /^https:\/\//i.test(r.thumbnail) ? r.thumbnail : '';
+  return `<article class="result${thumb ? ' has-thumb' : ''}">
+  <div class="r-text">
+    <a class="r-head" href="${safeUrl(r.url)}"${target}>
+      ${avatar(r.url)}
+      <span class="r-site"><span class="r-host">${e(hostOf(r.url))}</span><span class="r-url">${e(displayUrl(r.url))}</span></span>
+    </a>
+    <h3 class="r-title"><a href="${safeUrl(r.url)}"${target}>${e(r.title || r.url)}</a></h3>
+    ${r.content || date ? `<p class="r-snippet">${date ? `<span class="r-date">${e(date)} — </span>` : ''}${e(r.content ?? '')}</p>` : ''}
+  </div>
+  ${thumb ? `<a class="r-thumb" href="${safeUrl(r.url)}"${target} tabindex="-1"><img src="${safeUrl(thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.result').classList.remove('has-thumb');this.parentNode.remove()"></a>` : ''}
 </article>`;
 }
 
@@ -303,9 +313,10 @@ export function settingsPage(opts: {
         <span><strong>Show the AI Overview</strong><small>Streams in above web results on every search.</small></span>
       </label>
       <div class="row">
-        <span class="row-label"><strong>Depth</strong><small>What Claude gets to read before writing.</small></span>
+        <span class="row-label"><strong>Source</strong><small>Where the answer comes from. Every mode cites the results.</small></span>
         <div class="radios">
-          <label><input type="radio" name="overviewMode" value="snippets"${s.overviewMode === 'snippets' ? ' checked' : ''}> <strong>Snippets</strong> <small>Fast (a few seconds). Titles and snippets of the top ${config.snippetSources} results.</small></label>
+          <label><input type="radio" name="overviewMode" value="knowledge"${s.overviewMode === 'knowledge' ? ' checked' : ''}> <strong>Claude's knowledge</strong> <small>Fastest. Claude answers from what it already knows and cites the results that back each point. Best for general questions; can lag on recent events.</small></label>
+          <label><input type="radio" name="overviewMode" value="snippets"${s.overviewMode === 'snippets' ? ' checked' : ''}> <strong>Snippets</strong> <small>A few seconds. Summarizes only the titles and snippets of the top ${config.snippetSources} results.</small></label>
           <label><input type="radio" name="overviewMode" value="deep"${s.overviewMode === 'deep' ? ' checked' : ''}> <strong>Read the pages</strong> <small>Slower (10–30 s). Fetches and reads the top ${config.deepReadPages} pages, then answers with real detail.</small></label>
         </div>
       </div>

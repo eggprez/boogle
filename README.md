@@ -8,10 +8,14 @@ minus Google's AI Overview and plus one written by Claude.
 - **AI Overview** streams in above the results on every search. It's generated
   by the Claude Code CLI running inside the container, on your Claude
   subscription, with inline citations that link to the sources.
-- **Two depths**, switchable in Settings: *Snippets* (fast, a few seconds,
-  summarises the top 10 result snippets) or *Read the pages* (10–30 s, fetches
-  and reads the top 5 pages, then answers with real detail). A "Read the pages"
-  button on any overview upgrades that one query on demand.
+- **Three sources**, switchable in Settings: *Claude's knowledge* (the
+  default: Claude answers from what it knows and cites the results that back
+  each point; fastest, best for general questions, can lag on recent events),
+  *Snippets* (a few seconds, summarises only the top 10 result snippets) or
+  *Read the pages* (10–30 s, fetches and reads the top 5 pages, then answers
+  with real detail). A "Read the pages" button on any overview upgrades that
+  one query on demand. When SearXNG returns a knowledge panel (a person, place,
+  film, …) the overview stays out of the way and the panel answers instead.
 - **Follow-up questions**: an "Ask a follow-up" box under every overview
   answers from the same sources, streamed the same way, without a new search.
   Claude also ends each overview with three **"Search next"** suggestions.
@@ -20,7 +24,8 @@ minus Google's AI Overview and plus one written by Claude.
   hash of the prompt, so editing the prompt never serves stale overviews.
 - **Time filter** (past day / week / month / year) on every tab, real
   **favicons** on result cards (proxied and cached, never fetched by your
-  browser), an **image lightbox** with arrow-key browsing, and **inline video
+  browser), page **thumbnails** on web results when an engine supplies one,
+  an **image lightbox** with arrow-key browsing, and **inline video
   playback** for results that offer an embed.
 - **Keyboard driven**: `/` focuses search, `j`/`k` move through results,
   `Enter` opens, `o` opens in a new tab, `1`–`4` switch tabs, `Esc` clears.
@@ -211,8 +216,8 @@ secret only NGINX knows.
 
 ## Settings page
 
-`/settings` (the gear icon) has: overview on/off, depth (snippets vs read the
-pages), model, safe search, language, open-in-new-tab, theme, a status panel,
+`/settings` (the gear icon) has: overview on/off, source (Claude's knowledge,
+snippets, or read the pages), model, safe search, language, open-in-new-tab, theme, a status panel,
 a cache-clear button, the keyboard shortcuts, and the bang list. Settings are stored per user under
 `/data/settings/` in the `boogle-data` volume.
 
@@ -233,7 +238,7 @@ a cache-clear button, the keyboard shortcuts, and the bang list. Settings are st
 | `MAX_CONCURRENT_OVERVIEWS` | `2` | parallel Claude processes at most |
 | `DEEP_READ_PAGES` | `5` | pages read in deep mode |
 | `DEEP_READ_CHARS_PER_PAGE` | `6000` | text cap per page in deep mode |
-| `SNIPPET_SOURCES` | `10` | results given to Claude in snippet mode |
+| `SNIPPET_SOURCES` | `10` | results given to Claude in snippet and knowledge mode |
 
 ## Reliability notes
 
@@ -261,7 +266,10 @@ claude -p --no-session-persistence --tools "" \
        --system-prompt "<overview instructions>"
 ```
 
-with the query and numbered sources on stdin. Replacing the system prompt and
+with the query and numbered sources on stdin (in knowledge mode the results
+are labelled as citation targets only, and the prompt tells Claude to answer
+from its own knowledge while deferring to a result that is newer than its
+training data). Replacing the system prompt and
 giving it an empty tool list turns Claude Code into a plain model call; the
 `stream-json` output gives token deltas that are forwarded to the browser over
 Server-Sent Events and rendered as Markdown with `[n]` citations turned into

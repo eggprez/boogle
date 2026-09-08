@@ -218,6 +218,7 @@
     let retried = false;
     let ready = false;
     const history = []; // follow-up turns, sent back as context for the next one
+    const modeLabel = (m, busy) => (m === 'deep' ? (busy ? 'Reading pages' : 'Read pages') : m === 'knowledge' ? "Claude's knowledge" : 'Snippets');
 
     const paint = (streaming) => {
       raf = 0;
@@ -264,7 +265,7 @@
       followupsEl.innerHTML = '';
       history.length = 0;
       note.textContent = '';
-      setBadges([{ text: mode === 'deep' ? 'Reading pages' : 'Snippets', muted: true }]);
+      setBadges([{ text: modeLabel(mode, true), muted: true }]);
 
       const url = `/api/overview?q=${encodeURIComponent(q)}&mode=${encodeURIComponent(mode)}${t ? `&t=${t}` : ''}${refresh ? '&refresh=1' : ''}`;
       es = new EventSource(url);
@@ -296,7 +297,7 @@
         status.textContent = '';
         setBadges([
           { text: cap(d.model) },
-          { text: d.mode === 'deep' ? 'Read pages' : 'Snippets', muted: true },
+          { text: modeLabel(d.mode, false), muted: true },
           ...(d.cached ? [{ text: 'Cached', muted: true }] : []),
         ]);
         note.textContent = d.cached ? `Cached ${relTime(d.createdAt)}` : 'Just now';

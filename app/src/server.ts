@@ -11,7 +11,7 @@ import { getFavicon, validHost } from './favicons.js';
 import { generateFollowup, generateOverview, type OverviewEvent } from './overview/index.js';
 import { claudeVersion, type FollowupTurn } from './overview/claude.js';
 import { autocomplete, parseTimeRange, ping, search, TABS, type SearxResponse, type Tab } from './searxng.js';
-import { loadSettings, sanitize, saveSettings, type OverviewMode } from './settings.js';
+import { loadSettings, parseMode, sanitize, saveSettings } from './settings.js';
 import { e } from './views/html.js';
 import { homePage, resultsPage, settingsPage } from './views/pages.js';
 
@@ -64,8 +64,7 @@ app.get('/search', async (c) => {
   const timeRange = parseTimeRange(c.req.query('t'));
   const fresh = c.req.query('retry') === '1';
   const settings = await loadSettings(c.get('user'));
-  const modeParam = c.req.query('mode');
-  const overviewMode: OverviewMode = modeParam === 'deep' || modeParam === 'snippets' ? modeParam : settings.overviewMode;
+  const overviewMode = parseMode(c.req.query('mode'), settings.overviewMode);
 
   let data: SearxResponse | null = null;
   let error: string | undefined;
@@ -143,8 +142,7 @@ app.get('/api/overview', async (c) => {
   if (!q) return c.json({ error: 'missing q' }, 400);
   const settings = await loadSettings(c.get('user'));
   if (!settings.overviewEnabled) return c.json({ error: 'overview disabled' }, 403);
-  const modeParam = c.req.query('mode');
-  const mode: OverviewMode = modeParam === 'deep' || modeParam === 'snippets' ? modeParam : settings.overviewMode;
+  const mode = parseMode(c.req.query('mode'), settings.overviewMode);
   const refresh = c.req.query('refresh') === '1';
   const timeRange = parseTimeRange(c.req.query('t'));
   return streamOverview(c, (signal) => generateOverview({ query: q, settings, mode, refresh, timeRange, signal }));
@@ -162,7 +160,7 @@ app.post('/api/followup', async (c) => {
   if (!q || !question) return c.json({ error: 'missing q or question' }, 400);
   const settings = await loadSettings(c.get('user'));
   if (!settings.overviewEnabled) return c.json({ error: 'overview disabled' }, 403);
-  const mode: OverviewMode = body.mode === 'deep' || body.mode === 'snippets' ? body.mode : settings.overviewMode;
+  const mode = parseMode(body.mode, settings.overviewMode);
   const timeRange = parseTimeRange(body.t);
   const history: FollowupTurn[] = Array.isArray(body.history)
     ? body.history

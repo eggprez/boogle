@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PROMPT_VERSION, splitRelated } from '../src/overview/claude.js';
+import { buildUserPrompt, PROMPT_VERSION, splitRelated, systemPrompt } from '../src/overview/claude.js';
 import { overviewKey } from '../src/overview/index.js';
 
 describe('splitRelated', () => {
@@ -18,6 +18,26 @@ describe('splitRelated', () => {
   });
   it('caps at three queries', () => {
     expect(splitRelated('x\n```related\n1\n2\n3\n4\n5\n```').related).toHaveLength(3);
+  });
+});
+
+describe('prompts', () => {
+  const src = { n: 1, title: 'T', url: 'https://a.com/x', host: 'a.com', text: 'snippet text' };
+  it('knowledge mode answers from the model and treats results as citations only', () => {
+    const sys = systemPrompt('Boogle', 'knowledge');
+    expect(sys).toMatch(/from your own knowledge/);
+    expect(sys).not.toMatch(/using ONLY those sources/);
+    const user = buildUserPrompt({ query: 'cats', sources: [src], mode: 'knowledge' });
+    expect(user).toMatch(/for citations and freshness only/);
+    expect(user).toContain('[1] T — a.com');
+  });
+  it('snippet and deep modes stay grounded in the sources', () => {
+    expect(systemPrompt('Boogle', 'snippets')).toMatch(/using ONLY those sources/);
+    expect(systemPrompt('Boogle', 'deep')).toMatch(/full article text/);
+    expect(buildUserPrompt({ query: 'cats', sources: [src], mode: 'deep' })).toMatch(/full article text/);
+  });
+  it('knowledge mode copes with an empty result list', () => {
+    expect(buildUserPrompt({ query: 'cats', sources: [], mode: 'knowledge' })).toMatch(/answer without citations/);
   });
 });
 

@@ -2,7 +2,16 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from './config.js';
 
-export type OverviewMode = 'snippets' | 'deep';
+/**
+ * knowledge: Claude answers from what it knows; the results only supply citations.
+ * snippets:  Claude summarizes the titles + snippets of the top results.
+ * deep:      the top pages are fetched and Claude reads their text.
+ */
+export type OverviewMode = 'knowledge' | 'snippets' | 'deep';
+export const OVERVIEW_MODES: OverviewMode[] = ['knowledge', 'snippets', 'deep'];
+export function parseMode(v: unknown, fallback: OverviewMode): OverviewMode {
+  return OVERVIEW_MODES.includes(v as OverviewMode) ? (v as OverviewMode) : fallback;
+}
 export type Model = 'haiku' | 'sonnet' | 'opus';
 export type Theme = 'system' | 'light' | 'dark';
 
@@ -18,7 +27,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   overviewEnabled: true,
-  overviewMode: 'snippets',
+  overviewMode: 'knowledge',
   model: 'sonnet',
   theme: 'system',
   safesearch: 0,
@@ -56,7 +65,7 @@ export function sanitize(input: Partial<Record<keyof Settings, unknown>>): Setti
   const s = { ...DEFAULT_SETTINGS };
   s.overviewEnabled = toBool(input.overviewEnabled, s.overviewEnabled);
   s.openInNewTab = toBool(input.openInNewTab, s.openInNewTab);
-  if (input.overviewMode === 'snippets' || input.overviewMode === 'deep') s.overviewMode = input.overviewMode;
+  s.overviewMode = parseMode(input.overviewMode, s.overviewMode);
   if (MODELS.some((m) => m.id === input.model)) s.model = input.model as Model;
   if (input.theme === 'system' || input.theme === 'light' || input.theme === 'dark') s.theme = input.theme;
   const ss = Number(input.safesearch);

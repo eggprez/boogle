@@ -87,7 +87,9 @@ export async function* generateOverview(opts: {
 
   const deep = mode === 'deep';
   const picked = pickSources(results, deep ? Math.max(config.deepReadPages * 2, 8) : config.snippetSources, { deep });
-  if (!picked.length) {
+  // Knowledge mode answers from the model itself; the results only supply
+  // citations, so an empty list just means an uncited answer.
+  if (!picked.length && mode !== 'knowledge') {
     yield { type: 'error', message: 'No results to summarize.' };
     return;
   }
@@ -130,7 +132,7 @@ export async function* generateOverview(opts: {
   try {
     let finalText = '';
     let costUsd: number | undefined;
-    for await (const ev of runClaudeOverview({ query, sources, model, deep, signal })) {
+    for await (const ev of runClaudeOverview({ query, sources, model, mode, signal })) {
       if (ev.type === 'delta') yield ev;
       else if (ev.type === 'error') {
         yield ev;
@@ -183,7 +185,7 @@ export async function* generateFollowup(opts: {
   }
   try {
     const followup = { question, overview: hit.text, history: opts.history.slice(-3) };
-    for await (const ev of runClaudeOverview({ query, sources, model, deep: mode === 'deep', signal, followup })) {
+    for await (const ev of runClaudeOverview({ query, sources, model, mode, signal, followup })) {
       if (ev.type === 'delta') yield ev;
       else if (ev.type === 'error') {
         yield ev;
