@@ -500,7 +500,16 @@ body.lb-open { overflow: hidden; }
 .ov-skeleton { display: grid; gap: 10px; padding: 4px 0; }
 .ov-skeleton span { height: 13px; border-radius: 7px; background: linear-gradient(90deg, var(--bg-2), var(--accent-soft-2), var(--bg-2)); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 .ov-skeleton span:nth-child(2) { width: 92%; } .ov-skeleton span:nth-child(3) { width: 70%; }
-.ov-sources { position: relative; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+/* Compact source list under the overview text: only shown where there is no
+   room for the side panel (see .ov-side). */
+.ov-sources { position: relative; margin-top: 12px; }
+.ov-sources summary { cursor: pointer; font-size: 0.8125rem; color: var(--muted); font-weight: 500; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+.ov-sources summary::-webkit-details-marker { display: none; }
+.ov-sources summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 0.15s; }
+.ov-sources details[open] summary::before { transform: rotate(45deg); }
+.ov-sources summary:hover { color: var(--accent-ink); }
+.src-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+@media (min-width: 1101px) { .overview .ov-sources { display: none; } }
 .src {
   display: inline-flex; align-items: center; gap: 7px; max-width: 100%;
   padding: 4px 11px 4px 5px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--border);
@@ -510,6 +519,40 @@ body.lb-open { overflow: hidden; }
 .src .n { display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px; border-radius: 50%; background: var(--accent-soft-2); color: var(--accent-ink); font-weight: 700; font-size: 0.6562rem; }
 .src .h { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .src.deep .n { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; }
+/* Citation panel in the right column (wide screens only). */
+.ov-side { min-width: 0; }
+@media (max-width: 1100px) { .ov-side { display: none; } }
+.ov-panel {
+  position: sticky; top: 84px; max-height: calc(100vh - 100px); overflow-y: auto; scrollbar-width: thin;
+  border: 1px solid var(--border); border-radius: 18px; padding: 14px 14px 12px; background: var(--card);
+  box-shadow: var(--shadow-sm); animation: rise 0.4s ease;
+}
+.ov-panel::before { content: ""; position: sticky; display: block; top: -14px; left: 0; right: 0; margin: -14px -14px 10px; height: 4px; background: linear-gradient(90deg, var(--accent), var(--accent-2), var(--accent-3)); z-index: 1; }
+.ov-panel-head { display: flex; align-items: center; gap: 7px; font-weight: 650; font-size: 0.9062rem; letter-spacing: -0.01em; margin: 0 2px 10px; }
+.ov-panel-head svg { width: 16px; height: 16px; color: var(--accent-ink); }
+.ov-panel-count { margin-left: auto; font-size: 0.7188rem; font-weight: 650; color: var(--accent-ink); background: var(--accent-soft); padding: 2px 9px; border-radius: 999px; }
+.ov-panel-hint { margin: 10px 2px 0; font-size: 0.75rem; color: var(--muted); line-height: 1.4; }
+.ov-cites { display: grid; gap: 6px; }
+.cite-card {
+  display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; align-items: start;
+  padding: 9px 10px 9px 8px; border-radius: 12px; border: 1px solid transparent; color: var(--fg);
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+.cite-card:hover, .cite-card.hot { text-decoration: none; background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.cite-card.hot { transform: translateX(2px); }
+.cite-card.unused { opacity: 0.6; }
+.cite-card.unused:hover, .cite-card.unused.hot { opacity: 1; }
+.cite-card .n { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-top: 1px; border-radius: 50%; background: var(--accent-soft-2); color: var(--accent-ink); font-weight: 700; font-size: 0.7188rem; }
+.cite-card.deep .n { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; }
+.cc-body { display: grid; gap: 3px; min-width: 0; }
+.cc-title { font-size: 0.875rem; font-weight: 550; line-height: 1.3; color: var(--link); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cc-meta { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted); min-width: 0; flex-wrap: wrap; }
+.cc-fav { width: 14px; height: 14px; border-radius: 4px; object-fit: contain; flex: none; }
+.cc-host { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-tag { font-size: 0.6562rem; font-weight: 650; letter-spacing: 0.03em; text-transform: uppercase; color: var(--accent-ink); background: var(--accent-soft); padding: 1px 7px; border-radius: 999px; }
+.cc-uses { margin-left: auto; font-size: 0.7188rem; color: var(--muted); white-space: nowrap; }
+.cc-excerpt { font-size: 0.8125rem; line-height: 1.45; color: var(--fg-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.cite.hot { background: var(--accent); color: #fff; }
 .ov-actions { position: relative; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border-2); }
 .ov-btn {
   display: inline-flex; align-items: center; gap: 7px; font: inherit; font-size: 0.8125rem; font-weight: 500;

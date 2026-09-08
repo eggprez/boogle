@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SearxResult } from '../src/searxng.js';
-import { pickSources } from '../src/overview/sources.js';
+import { excerptOf, pickSources } from '../src/overview/sources.js';
 
 const r = (url: string, engines: string[] = ['google']): SearxResult => ({ url, title: url, engines });
 
@@ -29,5 +29,18 @@ describe('pickSources', () => {
   it('honours max', () => {
     const list = Array.from({ length: 30 }, (_, i) => r(`https://h${i}.com/`));
     expect(pickSources(list, 5)).toHaveLength(5);
+  });
+});
+
+describe('excerptOf', () => {
+  it('collapses whitespace and leaves short text alone', () => {
+    expect(excerptOf('  a\n  b   c ')).toBe('a b c');
+    expect(excerptOf(undefined)).toBe('');
+  });
+  it('cuts long text at a word boundary with an ellipsis', () => {
+    const out = excerptOf('word '.repeat(100), 50);
+    expect(out.length).toBeLessThanOrEqual(51);
+    expect(out.endsWith('…')).toBe(true);
+    expect(out).not.toMatch(/ …$/);
   });
 });

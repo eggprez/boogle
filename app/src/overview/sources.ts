@@ -7,6 +7,18 @@ const UNREADABLE_HOSTS = [
 ];
 const UNREADABLE_PATH = /\.(pdf|zip|gz|tar|exe|dmg|mp4|mp3|png|jpe?g|gif|webp|svg|pptx?|xlsx?|docx?)$/i;
 
+/**
+ * Short, single-line preview of a source's text for the citation panel:
+ * whitespace collapsed, cut at a word boundary, never mid-sentence noise.
+ */
+export function excerptOf(text: string | undefined, max = 220): string {
+  const t = (text ?? '').replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const at = cut.lastIndexOf(' ');
+  return (at > max * 0.6 ? cut.slice(0, at) : cut).replace(/[\s,;:.\-–—]+$/, '') + '…';
+}
+
 export function hostOf(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, '');

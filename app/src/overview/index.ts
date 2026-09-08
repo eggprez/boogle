@@ -4,7 +4,7 @@ import { search, type SearxResult, type TimeRange } from '../searxng.js';
 import type { Model, OverviewMode, Settings } from '../settings.js';
 import { PROMPT_VERSION, runClaudeOverview, splitRelated, type FollowupTurn, type OverviewSource } from './claude.js';
 import { fetchReadable } from './pages.js';
-import { hostOf, pickSources } from './sources.js';
+import { excerptOf, hostOf, pickSources } from './sources.js';
 
 export type OverviewEvent =
   | { type: 'status'; stage: 'searching' | 'reading' | 'writing'; detail?: string }
@@ -19,6 +19,13 @@ export interface PublicSource {
   url: string;
   host: string;
   deep?: boolean;
+  /** First sentence or two of what the source contributed (snippet or page text). */
+  excerpt?: string;
+}
+
+/** Older cache entries predate `excerpt`; rebuild it from the stored source texts. */
+function withExcerpts(sources: PublicSource[], texts: string[] | undefined): PublicSource[] {
+  return sources.map((s, i) => (s.excerpt || !texts?.[i] ? s : { ...s, excerpt: excerptOf(texts[i]) }));
 }
 
 export { hostOf };
@@ -67,7 +74,7 @@ export async function* generateOverview(opts: {
   else {
     const hit = await getCached(key);
     if (hit) {
-      yield { type: 'sources', sources: hit.sources };
+      yield { type: 'sources', sources: withExcerpts(hit.sources, hit.sourceTexts) };
       yield { type: 'delta', text: hit.text };
       yield { type: 'done', cached: true, model: hit.model as Model, mode: hit.mode as OverviewMode, createdAt: hit.createdAt, related: hit.related ?? [] };
       return;
@@ -118,7 +125,7 @@ export async function* generateOverview(opts: {
   }
   sources.forEach((s, i) => (s.n = i + 1));
 
-  const publicSources: PublicSource[] = sources.map((s) => ({ n: s.n, title: s.title, url: s.url, host: s.host, ...(s.deep ? { deep: true } : {}) }));
+  const publicSources: PublicSource[] = sources.map((s) => ({ n: s.n, title: s.title, url: s.url, host: s.host, ...(s.deep ? { deep: true } : {}), ...(s.text ? { excerpt: excerptOf(s.text) } : {}) }));
   yield { type: 'sources', sources: publicSources };
   yield { type: 'status', stage: 'writing', detail: model };
 
@@ -174,7 +181,7 @@ export async function* generateFollowup(opts: {
     return;
   }
   const sources: OverviewSource[] = hit.sources.map((s, i) => ({ ...s, text: hit.sourceTexts?.[i] ?? '' }));
-  yield { type: 'sources', sources: hit.sources };
+  yield { type: 'sources', sources: withExcerpts(hit.sources, hit.sourceTexts) };
   yield { type: 'status', stage: 'writing', detail: model };
 
   let release: (() => void) | null = null;

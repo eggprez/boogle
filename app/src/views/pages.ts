@@ -139,6 +139,16 @@ export function resultsPage(opts: {
     : '';
 
 
+  // On wide screens the overview's citations live in the otherwise-empty
+  // right column, with title, site and excerpt per source; narrow screens get
+  // a collapsed one-line list under the text instead (see .ov-sources).
+  const ovSide = `<aside class="side-col ov-side" id="ov-side" hidden>
+  <div class="ov-panel">
+    <div class="ov-panel-head">${icons.book} <span>Sources</span> <span class="ov-panel-count" id="ov-cites-count"></span></div>
+    <div class="ov-cites" id="ov-cites"></div>
+    <p class="ov-panel-hint">Numbers in the overview point at these. Hover one to see where it was used.</p>
+  </div>
+</aside>`;
   const overview = showOverview
     ? `<section class="overview" id="overview" data-q="${e(q)}" data-mode="${opts.overviewMode}" data-model="${e(settings.model)}" data-t="${timeRange}">
   <div class="ov-head">
@@ -187,7 +197,7 @@ export function resultsPage(opts: {
     ${relatedHtml}
     ${pager}
   </div>
-  ${aside ? `<aside class="side-col">${aside}</aside>` : ''}
+  ${aside ? `<aside class="side-col">${aside}</aside>` : showOverview ? ovSide : ''}
 </main>
 <footer class="foot"><span>${e(config.siteName)}</span> · Results by SearXNG · Overview by Claude · <a href="/settings">Settings</a></footer>`,
   });

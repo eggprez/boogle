@@ -230,16 +230,72 @@
     const setBadges = (list) => {
       badges.innerHTML = list.map((b) => `<span class="badge${b.muted ? ' muted' : ''}">${esc(b.text)}</span>`).join('');
     };
+    // Sources render twice: a collapsed one-liner under the text (what narrow
+    // screens see) and detailed cards in the right column (wide screens).
+    // CSS shows one or the other, never both.
+    const sideEl = document.getElementById('ov-side');
+    const citesEl = document.getElementById('ov-cites');
+    const citesCount = document.getElementById('ov-cites-count');
     const renderSources = () => {
-      if (!sources.length) return (srcEl.hidden = true);
-      srcEl.innerHTML = sources
+      if (!sources.length) {
+        srcEl.hidden = true;
+        if (sideEl) sideEl.hidden = true;
+        return;
+      }
+      const chips = sources
         .map(
           (s) =>
             `<a class="src${s.deep ? ' deep' : ''}" href="${esc(s.url)}" target="_blank" rel="noopener" title="${esc(s.title)}"><span class="n">${s.n}</span><span class="h">${esc(s.host)}</span></a>`,
         )
         .join('');
+      srcEl.innerHTML = `<details><summary>${sources.length} source${sources.length === 1 ? '' : 's'}</summary><div class="src-list">${chips}</div></details>`;
       srcEl.hidden = false;
+      if (!sideEl || !citesEl) return;
+      citesEl.innerHTML = sources
+        .map(
+          (s) =>
+            `<a class="cite-card${s.deep ? ' deep' : ''}" data-n="${s.n}" href="${esc(s.url)}" target="_blank" rel="noopener">` +
+            `<span class="n">${s.n}</span>` +
+            `<span class="cc-body">` +
+            `<span class="cc-title"></span>` +
+            `<span class="cc-meta"><img class="cc-fav" src="/favicon?host=${encodeURIComponent(s.host)}" alt="" loading="lazy" onerror="this.remove()"><span class="cc-host"></span>${s.deep ? '<span class="cc-tag">Read in full</span>' : ''}<span class="cc-uses"></span></span>` +
+            (s.excerpt ? `<span class="cc-excerpt"></span>` : '') +
+            `</span></a>`,
+        )
+        .join('');
+      // Text goes in via textContent so nothing from the web is parsed as HTML.
+      citesEl.querySelectorAll('.cite-card').forEach((card, i) => {
+        card.querySelector('.cc-title').textContent = sources[i].title || sources[i].host;
+        card.querySelector('.cc-host').textContent = sources[i].host;
+        const ex = card.querySelector('.cc-excerpt');
+        if (ex) ex.textContent = sources[i].excerpt;
+      });
+      citesCount.textContent = sources.length;
+      sideEl.hidden = false;
+      markUses();
     };
+    // How many times each source is cited in the overview so far.
+    const markUses = () => {
+      if (!citesEl) return;
+      const counts = new Map();
+      for (const m of text.matchAll(/\[(\d+(?:\s*,\s*\d+)*)\]/g)) {
+        for (const n of m[1].split(',')) counts.set(n.trim(), (counts.get(n.trim()) || 0) + 1);
+      }
+      citesEl.querySelectorAll('.cite-card').forEach((card) => {
+        const c = counts.get(card.dataset.n) || 0;
+        card.classList.toggle('unused', c === 0);
+        card.querySelector('.cc-uses').textContent = c ? `cited ×${c}` : '';
+      });
+    };
+    // Hovering a footnote number lights up its card, and vice versa.
+    const hot = (n, on) => {
+      citesEl?.querySelectorAll(`.cite-card[data-n="${n}"]`).forEach((el) => el.classList.toggle('hot', on));
+      root.querySelectorAll('.cite').forEach((el) => el.classList.toggle('hot', on && el.textContent.trim() === n));
+    };
+    root.addEventListener('mouseover', (e) => { const c = e.target.closest('.cite'); if (c) hot(c.textContent.trim(), true); });
+    root.addEventListener('mouseout', (e) => { const c = e.target.closest('.cite'); if (c) hot(c.textContent.trim(), false); });
+    citesEl?.addEventListener('mouseover', (e) => { const c = e.target.closest('.cite-card'); if (c) hot(c.dataset.n, true); });
+    citesEl?.addEventListener('mouseout', (e) => { const c = e.target.closest('.cite-card'); if (c) hot(c.dataset.n, false); });
     const renderRelated = (list) => {
       if (!list || !list.length) return (relatedEl.hidden = true);
       relatedEl.innerHTML =
@@ -259,6 +315,7 @@
       body.innerHTML = '<div class="ov-skeleton"><span></span><span></span><span></span></div>';
       status.textContent = 'Searching…';
       srcEl.hidden = true;
+      if (sideEl) sideEl.hidden = true;
       actions.hidden = true;
       relatedEl.hidden = true;
       askForm.hidden = true;
@@ -293,6 +350,7 @@
         cancelAnimationFrame(raf);
         raf = 0;
         paint(false);
+        markUses();
         root.classList.remove('busy');
         status.textContent = '';
         setBadges([
